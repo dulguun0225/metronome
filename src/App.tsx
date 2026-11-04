@@ -1,31 +1,24 @@
-import { batch, createSignal, Index, onCleanup, onMount, type Accessor } from "solid-js";
+import { batch, createEffect, createSignal, Index, on, onCleanup, onMount, type Accessor } from "solid-js";
 import { createStore } from "solid-js/store";
 import Beat from "./Beat";
 import { Metronome, type BeatSettings } from "./metronome";
-
-const MIN_TEMPO = 20;
-const MAX_TEMPO = 300;
-const MAX_SUBDIVISION = 8;
-const DEFAULT_TEMPO = 120;
-const DEFAULT_BEAT_COUNT = 4;
+import {
+  clampTempo,
+  clampVolume,
+  defaultBeatsRange,
+  defaultSettings,
+  getLocalStorage,
+  loadSettings,
+  MAX_TEMPO,
+  MIN_TEMPO,
+  saveSettings,
+  storageKey,
+} from "./settings";
+import { tapTempo } from "./tapTempo";
+import { ScreenWakeLock } from "./wakeLock";
 
 // Input types that are not typed into; key presses on them are not text entry.
 const NON_TEXT_INPUT_TYPES = new Set(["button", "checkbox", "radio", "range", "submit", "reset", "color", "file", "image"]);
-
-function defaultBeatSettings(index: number): BeatSettings {
-  // One flag per possible subdivision, sized to the largest choice so flags are kept when the subdivision changes.
-  // Only the first beat is accented.
-  return { subDivision: 4, enabled: Array.from({ length: MAX_SUBDIVISION }, () => true), accent: index === 0 };
-}
-
-// Default settings for beats `from` to `to - 1`.
-function defaultBeatsRange(from: number, to: number): BeatSettings[] {
-  return Array.from({ length: to - from }, (_, i) => defaultBeatSettings(from + i));
-}
-
-function clampTempo(n: number) {
-  return Math.min(MAX_TEMPO, Math.max(MIN_TEMPO, n));
-}
 
 // Conventional Italian tempo marking for a tempo in BPM.
 function tempoMarking(bpm: number) {
@@ -67,11 +60,15 @@ function commitInteger(
 }
 
 export default function App() {
-  const [beatCount, setBeatCount] = createSignal(DEFAULT_BEAT_COUNT);
-  const [tempo, setTempo] = createSignal(DEFAULT_TEMPO);
+  const storage = getLocalStorage();
+  const settingsKey = storageKey(location.pathname);
+  const saved = loadSettings(storage, settingsKey);
+  const [beatCount, setBeatCount] = createSignal(saved.beatCount);
+  const [tempo, setTempo] = createSignal(saved.tempo);
+  const [volume, setVolume] = createSignal(saved.volume);
   const [playing, setPlaying] = createSignal(false);
   // Settings for every beat ever shown, not only the first beatCount, so they are kept when the count is lowered then raised.
-  const [beats, setBeats] = createStore<BeatSettings[]>(defaultBeatsRange(0, beatCount()));
+  const [beats, setBeats] = createStore<BeatSettings[]>(saved.beats);
   const [activeBeat, setActiveBeat] = createSignal<number | null>(null);
   const [activeSub, setActiveSub] = createSignal<number | null>(null);
 
@@ -84,6 +81,32 @@ export default function App() {
       }),
   );
   onCleanup(() => metronome.dispose());
+  createEffect(() => metronome.setVolume(volume()));
+
+  // Saves the settings whenever one changes. Not on load, so stored data of another schema version stays until then.
+  createEffect(
+    on(
+      () => ({
+        tempo: tempo(),
+        beatCount: beatCount(),
+        volume: volume(),
+        beats: beats.map((b) => ({ subDivision: b.subDivision, enabled: [...b.enabled], accent: b.accent })),
+      }),
+      (settings) => saveSettings(storage, settingsKey, settings),
+      { defer: true },
+    ),
+  );
+
+  const wakeLock = new ScreenWakeLock();
+  // The browser releases the wake lock while the page is hidden.
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "visible") wakeLock.reacquire();
+  };
+  onMount(() => document.addEventListener("visibilitychange", onVisibilityChange));
+  onCleanup(() => {
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    wakeLock.disable();
+  });
 
   function changeBeatCount(count: number) {
     // Add settings before the count changes, so a new Beat never renders without them.
@@ -95,10 +118,12 @@ export default function App() {
 
   // Restores every setting, including those of beats beyond the current count. Playback continues with the new settings.
   function resetSettings() {
+    const defaults = defaultSettings();
     batch(() => {
-      setBeats(defaultBeatsRange(0, DEFAULT_BEAT_COUNT));
-      setBeatCount(DEFAULT_BEAT_COUNT);
-      setTempo(DEFAULT_TEMPO);
+      setBeats(defaults.beats);
+      setBeatCount(defaults.beatCount);
+      setTempo(defaults.tempo);
+      setVolume(defaults.volume);
     });
   }
 
@@ -107,12 +132,25 @@ export default function App() {
   }
 
   function togglePlaying() {
-    if (playing()) metronome.stop();
-    else metronome.start();
+    if (playing()) {
+      metronome.stop();
+      wakeLock.disable();
+    } else {
+      metronome.start();
+      wakeLock.enable();
+    }
     setPlaying((p) => !p);
   }
 
-  // Space toggles playback; ArrowUp/ArrowDown change the tempo.
+  // Tap times of the current tap tempo sequence.
+  let taps: number[] = [];
+  function tap() {
+    const result = tapTempo(taps, performance.now());
+    taps = result.taps;
+    if (result.tempo !== null) setTempo(result.tempo);
+  }
+
+  // Space toggles playback; ArrowUp/ArrowDown change the tempo; T taps the tempo.
   // Keys are left to the focused element where it uses them itself: typing in a field,
   // Space on a checkbox or radio, arrows on a radio group or the slider.
   function onKeyDown(e: KeyboardEvent) {
@@ -128,6 +166,9 @@ export default function App() {
       if (isInputOfType(target, "radio", "range")) return;
       e.preventDefault();
       nudgeTempo(e.key === "ArrowUp" ? 1 : -1);
+    } else if (e.key === "t" || e.key === "T") {
+      e.preventDefault();
+      if (!e.repeat) tap();
     }
   }
   onMount(() => window.addEventListener("keydown", onKeyDown));
@@ -138,7 +179,8 @@ export default function App() {
       <header class="app-header">
         <h1>Metronome</h1>
         <p class="hint">
-          <kbd>Space</kbd> start / stop <span aria-hidden="true">·</span> <kbd>↑</kbd> <kbd>↓</kbd> tempo
+          <kbd>Space</kbd> start / stop <span aria-hidden="true">·</span> <kbd>↑</kbd> <kbd>↓</kbd> tempo{" "}
+          <span aria-hidden="true">·</span> <kbd>T</kbd> tap
         </p>
       </header>
 
@@ -181,18 +223,35 @@ export default function App() {
               +
             </button>
           </div>
-          <input
-            class="tempo-slider"
-            type="range"
-            aria-label="Tempo"
-            aria-valuetext={`${tempo()} BPM`}
-            min={MIN_TEMPO}
-            max={MAX_TEMPO}
-            step="1"
-            value={tempo()}
-            style={{ "--fill": `${((tempo() - MIN_TEMPO) / (MAX_TEMPO - MIN_TEMPO)) * 100}%` }}
-            onInput={(e) => setTempo(clampTempo(Math.round(e.currentTarget.valueAsNumber)))}
-          />
+          <div class="tempo-slider-row">
+            <input
+              class="slider tempo-slider"
+              type="range"
+              aria-label="Tempo"
+              aria-valuetext={`${tempo()} BPM`}
+              min={MIN_TEMPO}
+              max={MAX_TEMPO}
+              step="1"
+              value={tempo()}
+              style={{ "--fill": `${((tempo() - MIN_TEMPO) / (MAX_TEMPO - MIN_TEMPO)) * 100}%` }}
+              onInput={(e) => setTempo(clampTempo(Math.round(e.currentTarget.valueAsNumber)))}
+            />
+            {/* Taps count on press, for timing; a keyboard-activated click (detail 0) counts as one too. */}
+            <button
+              type="button"
+              class="tap-button"
+              aria-label="Tap tempo"
+              aria-keyshortcuts="T"
+              onPointerDown={(e) => {
+                if (e.button === 0) tap();
+              }}
+              onClick={(e) => {
+                if (e.detail === 0) tap();
+              }}
+            >
+              Tap
+            </button>
+          </div>
         </div>
 
         <div class="meter">
@@ -248,6 +307,27 @@ export default function App() {
             </svg>
             <span>{playing() ? "Stop" : "Start"}</span>
           </button>
+          <div class="volume">
+            <svg class="volume-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path class="volume-speaker" d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" />
+              <path class="volume-waves" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" />
+            </svg>
+            <input
+              class="slider volume-slider"
+              type="range"
+              aria-label="Volume"
+              aria-valuetext={`${Math.round(volume() * 100)} %`}
+              min="0"
+              max="100"
+              step="1"
+              value={Math.round(volume() * 100)}
+              style={{ "--fill": `${volume() * 100}%` }}
+              onInput={(e) => setVolume(clampVolume(e.currentTarget.valueAsNumber / 100))}
+            />
+            <span class="volume-value" aria-hidden="true">
+              {Math.round(volume() * 100)}%
+            </span>
+          </div>
           <button type="button" class="reset-button" aria-label="Reset settings" onClick={resetSettings}>
             <svg class="reset-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 12a8 8 0 1 0 2.34-5.66M4 4v4h4" />

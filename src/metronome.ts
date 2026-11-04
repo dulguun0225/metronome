@@ -26,13 +26,32 @@ const TICK_MS = 25;
 const LOOKAHEAD = 0.1;
 const START_DELAY = 0.05;
 
-// Click sound.
+// Click sound. Peak gain of each click, relative to the master volume.
 const ATTACK = 0.002;
 const DECAY = 0.04;
-const PEAK_GAIN = 0.8;
+const ACCENT_LEVEL = 1;
+const BEAT_LEVEL = 0.7;
+const SUB_LEVEL = 0.5;
+// Time constant of master volume changes, so a change during a click does not make it crackle.
+const VOLUME_TIME_CONSTANT = 0.01;
 const ACCENT_HZ = 1760;
 const BEAT_HZ = 1320;
 const SUB_HZ = 880;
+
+// Audio Session API (Safari): the "playback" type makes audio play with the iPhone silent switch on.
+interface AudioSessionNavigator {
+  audioSession?: { type: string };
+}
+
+function setAudioSessionToPlayback() {
+  const session = (navigator as Navigator & AudioSessionNavigator).audioSession;
+  if (!session) return;
+  try {
+    session.type = "playback";
+  } catch {
+    // Not settable here; audio plays with the default type.
+  }
+}
 
 function subDivisionOf(beats: readonly BeatSettings[], beat: number): number {
   return Math.max(1, beats[beat]?.subDivision ?? 1);
@@ -54,6 +73,7 @@ export class Metronome {
   #onActive: (pos: Position | null) => void;
   #ctx: AudioContext | null = null;
   #output: GainNode | null = null;
+  #volume = 1;
   #timer: ReturnType<typeof setInterval> | undefined;
   #frame: number | undefined;
   #last: ScheduledNote | null = null;
@@ -69,11 +89,13 @@ export class Metronome {
   // Must be called from a user gesture the first time, so the AudioContext may start.
   start() {
     this.stop();
+    setAudioSessionToPlayback();
     this.#ctx ??= new AudioContext();
     const ctx = this.#ctx;
     void ctx.resume();
-    // A fresh output node per run, so stop() can silence notes already scheduled.
+    // A fresh output node per run, so stop() can silence notes already scheduled. Its gain is the master volume.
     this.#output = ctx.createGain();
+    this.#output.gain.value = this.#volume;
     this.#output.connect(ctx.destination);
     this.#last = null;
     this.#startTime = ctx.currentTime + START_DELAY;
@@ -92,6 +114,12 @@ export class Metronome {
     this.#queue = [];
     this.#last = null;
     this.#onActive(null);
+  }
+
+  // Master volume, 0 to 1; applies at once, also during playback.
+  setVolume(volume: number) {
+    this.#volume = volume;
+    if (this.#ctx && this.#output) this.#output.gain.setTargetAtTime(volume, this.#ctx.currentTime, VOLUME_TIME_CONSTANT);
   }
 
   dispose() {
@@ -119,8 +147,10 @@ export class Metronome {
       // After a timer stall (e.g. a background tab), continue from now instead of playing a burst of late notes.
       if (note.time < ctx.currentTime) note.time = ctx.currentTime;
       if (beats[note.beat]?.enabled[note.sub]) {
-        const hz = note.sub > 0 ? SUB_HZ : beats[note.beat].accent ? ACCENT_HZ : BEAT_HZ;
-        this.#click(ctx, output, note.time, hz);
+        const accent = beats[note.beat].accent;
+        const hz = note.sub > 0 ? SUB_HZ : accent ? ACCENT_HZ : BEAT_HZ;
+        const level = note.sub > 0 ? SUB_LEVEL : accent ? ACCENT_LEVEL : BEAT_LEVEL;
+        this.#click(ctx, output, note.time, hz, level);
       }
       // Unchecked subdivisions are queued too, so their position is still shown.
       this.#queue.push(note);
@@ -128,12 +158,12 @@ export class Metronome {
     }
   }
 
-  #click(ctx: AudioContext, output: AudioNode, time: number, hz: number) {
+  #click(ctx: AudioContext, output: AudioNode, time: number, hz: number, level: number) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.frequency.value = hz;
     gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(PEAK_GAIN, time + ATTACK);
+    gain.gain.exponentialRampToValueAtTime(level, time + ATTACK);
     gain.gain.exponentialRampToValueAtTime(0.0001, time + ATTACK + DECAY);
     osc.connect(gain);
     gain.connect(output);
