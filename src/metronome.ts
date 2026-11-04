@@ -34,6 +34,10 @@ const BEAT_LEVEL = 0.7;
 const SUB_LEVEL = 0.5;
 // Time constant of master volume changes, so a change during a click does not make it crackle.
 const VOLUME_TIME_CONSTANT = 0.01;
+// Stop fades the run's output out with this time constant, then disconnects it after STOP_DISCONNECT_MS,
+// when the gain is below 1e-3 of its value, so a click cut mid-envelope does not pop.
+const STOP_TIME_CONSTANT = 0.002;
+const STOP_DISCONNECT_MS = 15;
 const ACCENT_HZ = 1760;
 const BEAT_HZ = 1320;
 const SUB_HZ = 880;
@@ -80,6 +84,8 @@ export class Metronome {
   #startTime = 0;
   // Scheduled notes not yet reached by the audio clock, in time order.
   #queue: ScheduledNote[] = [];
+  // Oscillators of the current run that may not have started yet, so stop() can cancel them.
+  #pending: { osc: OscillatorNode; time: number }[] = [];
 
   constructor(readSettings: () => Settings, onActive: (pos: Position | null) => void) {
     this.#readSettings = readSettings;
@@ -109,7 +115,17 @@ export class Metronome {
     this.#timer = undefined;
     if (this.#frame !== undefined) cancelAnimationFrame(this.#frame);
     this.#frame = undefined;
-    this.#output?.disconnect();
+    const ctx = this.#ctx;
+    const output = this.#output;
+    if (ctx && output) {
+      const now = ctx.currentTime;
+      // Notes that have not started do not sound; the ones sounding fade out. Volume changes use
+      // setTargetAtTime from the current time too, so this later event takes over from them.
+      for (const { osc, time } of this.#pending) if (time > now) osc.stop(now);
+      output.gain.setTargetAtTime(0, now, STOP_TIME_CONSTANT);
+      setTimeout(() => output.disconnect(), STOP_DISCONNECT_MS);
+    }
+    this.#pending = [];
     this.#output = null;
     this.#queue = [];
     this.#last = null;
@@ -133,6 +149,7 @@ export class Metronome {
     const output = this.#output;
     if (!ctx || !output) return;
     const horizon = ctx.currentTime + LOOKAHEAD;
+    this.#pending = this.#pending.filter((p) => p.time > ctx.currentTime);
     for (;;) {
       // Settings are read for every note, so changes apply from the next unscheduled note.
       const { tempo, beatCount, beats } = this.#readSettings();
@@ -169,6 +186,7 @@ export class Metronome {
     gain.connect(output);
     osc.start(time);
     osc.stop(time + ATTACK + DECAY);
+    this.#pending.push({ osc, time });
   }
 
   // Arrow function so it can be passed to requestAnimationFrame directly.
