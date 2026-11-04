@@ -1,0 +1,722 @@
+:root {
+  color-scheme: light dark;
+
+  --bg: #f3f4f7;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: #dadde4;
+  --text: #15171c;
+  --text-muted: #5b6270;
+  --primary: #4338ca;
+  --primary-hover: #3730a3;
+  --on-primary: #ffffff;
+  --note-on: #4338ca;
+  --note-off: #9aa1ae;
+  --accent: #4338ca;
+  --active: #e0560b;
+  --active-strong: #c2410c;
+  --active-tint: #fff1e6;
+  --active-glow: rgb(224 86 11 / 0.35);
+  --stop: #1f2330;
+  --stop-hover: #343a4c;
+  --on-stop: #ffffff;
+  --focus: #2563eb;
+  --shadow: 0 1px 2px rgb(16 18 27 / 0.06), 0 4px 16px -6px rgb(16 18 27 / 0.12);
+
+  --radius: 14px;
+  --radius-small: 8px;
+  --gutter: 2rem;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1015;
+    --surface: #171a21;
+    --surface-2: #222631;
+    --border: #2d323e;
+    --text: #e9ebf1;
+    --text-muted: #9ba3b4;
+    --primary: #5b5fe0;
+    --primary-hover: #6d71ea;
+    --on-primary: #ffffff;
+    --note-on: #8f95ff;
+    --note-off: #5d6474;
+    --accent: #8f95ff;
+    --active: #ff8a3d;
+    --active-strong: #ffa265;
+    --active-tint: #2e1f16;
+    --active-glow: rgb(255 138 61 / 0.3);
+    --stop: #e9ebf1;
+    --stop-hover: #ffffff;
+    --on-stop: #0e1015;
+    --focus: #7aa7ff;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 20px -8px rgb(0 0 0 / 0.6);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Layout */
+
+.app {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem var(--gutter) 3rem;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0.05em 0.4em;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* Controls */
+
+.transport {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 1.5rem 2.5rem;
+  padding: 1.25rem 1.75rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.tempo {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  max-width: 30rem;
+}
+
+.tempo-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+}
+
+.tempo-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Number fields: no spin buttons, the −/+ buttons do that job. */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.tempo-value,
+.stepper-value {
+  border: 2px solid transparent;
+  border-radius: var(--radius-small);
+  background: transparent;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.tempo-value:hover,
+.stepper-value:hover {
+  border-color: var(--border);
+}
+
+.tempo-value:focus,
+.stepper-value:focus {
+  border-color: var(--focus);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.tempo-value {
+  width: 4.2ch;
+  padding: 0 0.1em;
+  font-size: 4rem;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.tempo-unit {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tempo-marking {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-style: italic;
+}
+
+.round-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 3rem;
+  height: 3rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-size: 1.5rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.round-button.small {
+  width: 2.5rem;
+  height: 2.5rem;
+  font-size: 1.25rem;
+}
+
+.round-button:hover:not(:disabled) {
+  border-color: var(--text-muted);
+}
+
+.round-button:active:not(:disabled) {
+  background: var(--border);
+}
+
+.round-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* Tempo slider */
+
+.tempo-slider {
+  --track: 6px;
+  --thumb: 22px;
+  width: 100%;
+  height: 2rem;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.tempo-slider::-webkit-slider-runnable-track {
+  height: var(--track);
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--primary) var(--fill), var(--surface-2) var(--fill));
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.tempo-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: calc((var(--track) - var(--thumb)) / 2);
+  border: 3px solid var(--primary);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+}
+
+.tempo-slider::-moz-range-track {
+  height: var(--track);
+  border-radius: 999px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.tempo-slider::-moz-range-progress {
+  height: var(--track);
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.tempo-slider::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 3px solid var(--primary);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+}
+
+.tempo-slider:focus-visible {
+  outline: none;
+}
+
+.tempo-slider:focus-visible::-webkit-slider-thumb {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.tempo-slider:focus-visible::-moz-range-thumb {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Beats per bar */
+
+.meter {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+}
+
+.control-label {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stepper-value {
+  width: 3.2ch;
+  padding: 0;
+  font-size: 2rem;
+  line-height: 1.2;
+}
+
+.bar-dots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 12rem;
+  min-height: 12px;
+}
+
+.bar-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--note-off);
+  opacity: 0.55;
+  align-self: center;
+  transition: background-color 90ms ease-out, opacity 90ms ease-out;
+}
+
+.bar-dot.accent {
+  width: 14px;
+  height: 14px;
+}
+
+.bar-dot.active {
+  background: var(--active);
+  opacity: 1;
+  transition: none;
+}
+
+/* Start / Stop */
+
+.play-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-width: 10rem;
+  height: 4rem;
+  padding: 0 2rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: 0 6px 18px -8px var(--primary);
+}
+
+.play-button:hover {
+  background: var(--primary-hover);
+}
+
+.play-button.playing {
+  background: var(--stop);
+  color: var(--on-stop);
+  box-shadow: none;
+}
+
+.play-button.playing:hover {
+  background: var(--stop-hover);
+}
+
+.play-button:focus-visible {
+  outline-offset: 3px;
+}
+
+.play-icon {
+  width: 1.4rem;
+  height: 1.4rem;
+  fill: currentColor;
+}
+
+/* Beats */
+
+.beats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.beat {
+  position: relative;
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+  padding: 0.875rem 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  /* Fade out only: the active state below sets no transition, so it appears at once. */
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+
+.beat.accent::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: var(--accent);
+}
+
+.beat.active {
+  border-color: var(--active);
+  background: var(--active-tint);
+  box-shadow: 0 0 0 2px var(--active), 0 10px 28px -12px var(--active-glow);
+  transition: none;
+}
+
+.beat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 1.75rem;
+}
+
+h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.beat-label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.beat-number {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.beat.active .beat-number {
+  color: var(--active-strong);
+}
+
+.beat-badge {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--surface);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Subdivision choice: native radios shown as a segmented control. */
+
+.segmented {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.segmented legend {
+  margin-bottom: 0.35rem;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.segmented-track {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.segment {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.segment input,
+.sub input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segment span {
+  display: grid;
+  place-items: center;
+  height: 2rem;
+  border-radius: 7px;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.segment input:hover + span {
+  color: var(--text);
+}
+
+.segment input:checked + span {
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+}
+
+.segment input:focus-visible + span {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Subdivision on/off: native checkboxes shown as pills; on = filled, off = hollow. */
+
+.subs {
+  display: flex;
+  gap: 6px;
+}
+
+.sub {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 2.5rem;
+}
+
+.sub-mark {
+  display: block;
+  width: 100%;
+  height: 70%;
+  border: 2px solid var(--note-on);
+  border-radius: 999px;
+  background: var(--note-on);
+  /* No transition: notes can be as little as 25 ms apart, and a fading previous note would look active too. */
+}
+
+/* The first note of a beat is the beat itself; later ones are subdivisions. */
+.sub:first-child .sub-mark {
+  height: 100%;
+}
+
+.sub.off .sub-mark {
+  border-style: dashed;
+  border-color: var(--note-off);
+  background: transparent;
+}
+
+.sub input:hover + .sub-mark {
+  filter: brightness(1.1);
+}
+
+.sub input:focus-visible + .sub-mark {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.sub.active .sub-mark {
+  border-color: var(--active);
+  background: var(--active);
+  box-shadow: 0 0 0 3px var(--active-glow);
+  transform: scaleY(1.12);
+}
+
+/* An unchecked note is silent but its position is still shown. */
+.sub.active.off .sub-mark {
+  border-style: solid;
+  background: var(--active-tint);
+}
+
+/* Phone */
+
+@media (max-width: 640px) {
+  :root {
+    --gutter: 16px;
+  }
+
+  .app {
+    padding-top: 1rem;
+  }
+
+  /* Keyboard shortcuts are of little use on a phone. */
+  .hint {
+    display: none;
+  }
+
+  .tempo-row {
+    justify-content: space-between;
+  }
+
+  .transport {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.25rem;
+    padding: 1rem;
+  }
+
+  .tempo {
+    max-width: none;
+  }
+
+  .meter {
+    grid-template-columns: auto auto;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .meter .control-label {
+    justify-self: start;
+  }
+
+  .bar-dots {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    max-width: none;
+  }
+
+  .play-button {
+    width: 100%;
+  }
+
+  .beats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .segment span {
+    height: 2.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .sub.active .sub-mark {
+    transform: none;
+  }
+}
