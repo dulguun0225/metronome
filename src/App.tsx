@@ -6,13 +6,21 @@ import { Metronome, type BeatSettings } from "./metronome";
 const MIN_TEMPO = 20;
 const MAX_TEMPO = 300;
 const MAX_SUBDIVISION = 8;
+const DEFAULT_TEMPO = 120;
+const DEFAULT_BEAT_COUNT = 4;
 
 // Input types that are not typed into; key presses on them are not text entry.
 const NON_TEXT_INPUT_TYPES = new Set(["button", "checkbox", "radio", "range", "submit", "reset", "color", "file", "image"]);
 
-function defaultBeatSettings(): BeatSettings {
+function defaultBeatSettings(index: number): BeatSettings {
   // One flag per possible subdivision, sized to the largest choice so flags are kept when the subdivision changes.
-  return { subDivision: 4, enabled: Array.from({ length: MAX_SUBDIVISION }, () => true) };
+  // Only the first beat is accented.
+  return { subDivision: 4, enabled: Array.from({ length: MAX_SUBDIVISION }, () => true), accent: index === 0 };
+}
+
+// Default settings for beats `from` to `to - 1`.
+function defaultBeatsRange(from: number, to: number): BeatSettings[] {
+  return Array.from({ length: to - from }, (_, i) => defaultBeatSettings(from + i));
 }
 
 function clampTempo(n: number) {
@@ -59,11 +67,11 @@ function commitInteger(
 }
 
 export default function App() {
-  const [beatCount, setBeatCount] = createSignal(4);
-  const [tempo, setTempo] = createSignal(120);
+  const [beatCount, setBeatCount] = createSignal(DEFAULT_BEAT_COUNT);
+  const [tempo, setTempo] = createSignal(DEFAULT_TEMPO);
   const [playing, setPlaying] = createSignal(false);
   // Settings for every beat ever shown, not only the first beatCount, so they are kept when the count is lowered then raised.
-  const [beats, setBeats] = createStore<BeatSettings[]>(Array.from({ length: beatCount() }, defaultBeatSettings));
+  const [beats, setBeats] = createStore<BeatSettings[]>(defaultBeatsRange(0, beatCount()));
   const [activeBeat, setActiveBeat] = createSignal<number | null>(null);
   const [activeSub, setActiveSub] = createSignal<number | null>(null);
 
@@ -80,9 +88,18 @@ export default function App() {
   function changeBeatCount(count: number) {
     // Add settings before the count changes, so a new Beat never renders without them.
     if (count > beats.length) {
-      setBeats((prev) => [...prev, ...Array.from({ length: count - prev.length }, defaultBeatSettings)]);
+      setBeats((prev) => [...prev, ...defaultBeatsRange(prev.length, count)]);
     }
     setBeatCount(count);
+  }
+
+  // Restores every setting, including those of beats beyond the current count. Playback continues with the new settings.
+  function resetSettings() {
+    batch(() => {
+      setBeats(defaultBeatsRange(0, DEFAULT_BEAT_COUNT));
+      setBeatCount(DEFAULT_BEAT_COUNT);
+      setTempo(DEFAULT_TEMPO);
+    });
   }
 
   function nudgeTempo(delta: number) {
@@ -180,7 +197,7 @@ export default function App() {
 
         <div class="meter">
           <label for="beat-count" class="control-label">
-            Beats per bar
+            Beats
           </label>
           <div class="stepper">
             <button
@@ -213,23 +230,31 @@ export default function App() {
           </div>
           <div class="bar-dots" aria-hidden="true">
             <Index each={Array.from({ length: beatCount() })}>
-              {(_, index) => <span class="bar-dot" classList={{ active: activeBeat() === index, accent: index === 0 }} />}
+              {(_, index) => <span class="bar-dot" classList={{ active: activeBeat() === index, accent: beats[index].accent }} />}
             </Index>
           </div>
         </div>
 
-        <button
-          type="button"
-          class="play-button"
-          classList={{ playing: playing() }}
-          aria-keyshortcuts="Space"
-          onClick={togglePlaying}
-        >
-          <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true">
-            {playing() ? <rect x="6" y="6" width="12" height="12" rx="2" /> : <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" />}
-          </svg>
-          <span>{playing() ? "Stop" : "Start"}</span>
-        </button>
+        <div class="actions">
+          <button
+            type="button"
+            class="play-button"
+            classList={{ playing: playing() }}
+            aria-keyshortcuts="Space"
+            onClick={togglePlaying}
+          >
+            <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true">
+              {playing() ? <rect x="6" y="6" width="12" height="12" rx="2" /> : <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" />}
+            </svg>
+            <span>{playing() ? "Stop" : "Start"}</span>
+          </button>
+          <button type="button" class="reset-button" aria-label="Reset settings" onClick={resetSettings}>
+            <svg class="reset-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 12a8 8 0 1 0 2.34-5.66M4 4v4h4" />
+            </svg>
+            <span>Reset</span>
+          </button>
+        </div>
       </section>
 
       <div class="beats">
@@ -242,6 +267,7 @@ export default function App() {
               activeSub={activeBeat() === index ? activeSub() : null}
               onSubDivisionChange={(n) => setBeats(index, "subDivision", n)}
               onEnabledChange={(i, on) => setBeats(index, "enabled", i, on)}
+              onAccentChange={(on) => setBeats(index, "accent", on)}
             />
           )}
         </Index>

@@ -2,6 +2,8 @@ export interface BeatSettings {
   subDivision: number;
   // One flag per possible subdivision; only the first `subDivision` flags are used.
   enabled: boolean[];
+  // Whether the first subdivision of this beat sounds at the accent pitch.
+  accent: boolean;
 }
 
 export interface Position {
@@ -117,7 +119,7 @@ export class Metronome {
       // After a timer stall (e.g. a background tab), continue from now instead of playing a burst of late notes.
       if (note.time < ctx.currentTime) note.time = ctx.currentTime;
       if (beats[note.beat]?.enabled[note.sub]) {
-        const hz = note.sub > 0 ? SUB_HZ : note.beat === 0 ? ACCENT_HZ : BEAT_HZ;
+        const hz = note.sub > 0 ? SUB_HZ : beats[note.beat].accent ? ACCENT_HZ : BEAT_HZ;
         this.#click(ctx, output, note.time, hz);
       }
       // Unchecked subdivisions are queued too, so their position is still shown.

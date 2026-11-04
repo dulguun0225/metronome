@@ -9,20 +9,29 @@ export default function Beat(props: {
     activeSub: number | null;
     onSubDivisionChange: (subDivision: number) => void;
     onEnabledChange: (sub: number, enabled: boolean) => void;
+    onAccentChange: (accent: boolean) => void;
 }) {
     const subDivisionChoices = [1, 2, 3, 4, 5, 6, 7, 8];
     const headingId = () => `beat-${props.index}-heading`;
     return (
         <section
             class="beat"
-            classList={{ active: props.active, accent: props.index === 0 }}
+            classList={{ active: props.active, accent: props.settings.accent }}
             aria-labelledby={headingId()}
         >
             <header class="beat-head">
                 <h2 id={headingId()}>
                     <span class="beat-label">Beat</span> <span class="beat-number">{props.index + 1}</span>
                 </h2>
-                {props.index === 0 && <span class="beat-badge">Accent</span>}
+                <label class="accent-toggle">
+                    <input
+                        type="checkbox"
+                        aria-label={`Accent beat ${props.index + 1}`}
+                        checked={props.settings.accent}
+                        onChange={(e) => props.onAccentChange(e.currentTarget.checked)}
+                    />
+                    <span aria-hidden="true">Accent</span>
+                </label>
             </header>
             <fieldset class="segmented">
                 <legend>Subdivision</legend>
