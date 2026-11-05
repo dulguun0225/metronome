@@ -60,3 +60,22 @@ test("each level band is at least 11 px tall on a 390 px wide screen", async ({ 
   const box = (await subSlider(page, 0, 7).boundingBox())!;
   expect(box.height / LEVEL_ORDER.length).toBeGreaterThanOrEqual(11);
 });
+
+test("each level band shows its own segment of equal height, and the mute segment sets mute", async ({ page }) => {
+  const slider = subSlider(page, 1, 1);
+  const box = (await slider.boundingBox())!;
+  const quarter = box.height / LEVEL_ORDER.length;
+  const segments = slider.locator(".sub-seg");
+  await expect(segments).toHaveCount(LEVEL_ORDER.length);
+  // Top to bottom: max accent, accent, normal, mute; each lies inside its own quarter of the cell.
+  for (let band = 0; band < LEVEL_ORDER.length; band++) {
+    const seg = segments.nth(band);
+    await expect(seg).toHaveAttribute("data-band", LEVEL_ORDER[LEVEL_ORDER.length - 1 - band]);
+    const s = (await seg.boundingBox())!;
+    expect(s.height).toBeGreaterThan(quarter * 0.75);
+    expect(s.y).toBeGreaterThanOrEqual(box.y + band * quarter - 0.5);
+    expect(s.y + s.height).toBeLessThanOrEqual(box.y + (band + 1) * quarter + 0.5);
+  }
+  await segments.nth(3).click();
+  await expectLevel(slider, "mute");
+});

@@ -697,8 +697,9 @@ h2 {
   outline-offset: 1px;
 }
 
-/* Subdivision levels: vertical sliders shown as outlined bars filled from the bottom, more for a higher
-   level; mute = hollow and dashed. */
+/* Subdivision levels: vertical sliders drawn as four stacked segments, one per level band (top max accent,
+   then accent, normal, and mute at the bottom). The sound segments fill from normal up to the level; the
+   mute segment carries a cross and is selected when the level is mute. */
 
 .subs {
   display: flex;
@@ -707,14 +708,14 @@ h2 {
 
 .sub {
   --mark: var(--note-on);
-  --fill: 0%;
+  --outline: var(--note-off);
   position: relative;
-  display: flex;
-  align-items: center;
+  display: grid;
+  /* Four equal level bands of 28 px each; each segment's margins put the gaps on the band boundaries. */
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   flex: 1 1 0;
   min-width: 0;
-  /* Four level bands of 12 px each. */
-  height: 3rem;
+  height: 7rem;
   padding: 0;
   border: 0;
   border-radius: var(--radius-small);
@@ -724,51 +725,73 @@ h2 {
   touch-action: none;
 }
 
-.sub[data-level="normal"] {
-  --fill: 34%;
-}
-
-.sub[data-level="accent"] {
-  --fill: 67%;
-}
-
-.sub[data-level="maxAccent"] {
-  --fill: 100%;
-}
-
-.sub-mark {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border: 2px solid var(--mark);
-  border-radius: var(--radius-small);
-  background: linear-gradient(to top, var(--mark) var(--fill), transparent var(--fill));
+.sub-seg {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  margin: 1.5px 0;
+  border: 2px solid var(--outline);
+  border-radius: 5px;
+  background: transparent;
   /* No transition: notes can be as little as 25 ms apart, and a fading previous note would look active too. */
 }
 
-.sub[data-level="mute"] .sub-mark {
+.sub-seg[data-band="mute"] {
   border-style: dashed;
-  border-color: var(--note-off);
-  background: transparent;
+  color: var(--outline);
 }
 
-.sub:hover .sub-mark {
-  filter: brightness(1.1);
+.sub-mute-icon {
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* Filled sound segments: normal and up to the level. */
+.sub[data-level="normal"] .sub-seg[data-band="normal"],
+.sub[data-level="accent"] .sub-seg:is([data-band="normal"], [data-band="accent"]),
+.sub[data-level="maxAccent"] .sub-seg:not([data-band="mute"]) {
+  border-color: var(--mark);
+  background: var(--mark);
+}
+
+.sub[data-level="mute"] .sub-seg[data-band="mute"] {
+  border-style: solid;
+  border-color: var(--mark);
+  background: color-mix(in srgb, var(--mark) 12%, transparent);
+  color: var(--mark);
+}
+
+/* With a fine pointer, the segment under it is highlighted before the press. */
+@media (hover: hover) {
+  .sub-seg:hover {
+    border-color: var(--mark);
+    background: color-mix(in srgb, var(--mark) 22%, transparent);
+  }
+
+  .sub-seg[data-band="mute"]:hover {
+    color: var(--mark);
+  }
+
+  .sub[data-level="normal"] .sub-seg[data-band="normal"]:hover,
+  .sub[data-level="accent"] .sub-seg:is([data-band="normal"], [data-band="accent"]):hover,
+  .sub[data-level="maxAccent"] .sub-seg:not([data-band="mute"]):hover {
+    background: var(--mark);
+    filter: brightness(1.15);
+  }
 }
 
 .sub.active {
   --mark: var(--active);
-}
-
-.sub.active .sub-mark {
+  --outline: var(--active);
   box-shadow: 0 0 0 3px var(--active-glow);
-  transform: scaleY(1.12);
 }
 
 /* A muted note is silent but its position is still shown. */
-.sub.active[data-level="mute"] .sub-mark {
-  border-style: solid;
-  border-color: var(--active);
+.sub.active[data-level="mute"] .sub-seg[data-band="mute"] {
   background: var(--active-tint);
 }
 
@@ -851,9 +874,5 @@ h2 {
   *::after {
     transition: none !important;
     animation: none !important;
-  }
-
-  .sub.active .sub-mark {
-    transform: none;
   }
 }

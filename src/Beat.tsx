@@ -9,6 +9,9 @@ const LEVEL_NAMES: Record<Level, string> = {
     maxAccent: "max accent",
 };
 
+// Level bands of a subdivision cell from top to bottom, as levelAtPosition maps them.
+const BANDS = [...LEVELS].reverse();
+
 export default function Beat(props: {
     index: number;
     settings: BeatSettings;
@@ -103,7 +106,18 @@ export default function Beat(props: {
                             onPointerCancel={onPointerEnd}
                             onKeyDown={(e) => onKeyDown(i, level(), e)}
                         >
-                            <span class="sub-mark" aria-hidden="true" />
+                            {/* One segment per level band, top to bottom, aligned with levelAtPosition's quarters. */}
+                            <For each={BANDS}>
+                                {(band) => (
+                                    <span class="sub-seg" data-band={band} aria-hidden="true">
+                                        {band === "mute" && (
+                                            <svg class="sub-mute-icon" viewBox="0 0 10 10">
+                                                <path d="M2 2l6 6M8 2l-6 6" />
+                                            </svg>
+                                        )}
+                                    </span>
+                                )}
+                            </For>
                         </div>
                     )}
                 </Index>
