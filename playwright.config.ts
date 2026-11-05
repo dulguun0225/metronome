@@ -7,7 +7,8 @@ export default defineConfig({
   testDir: "tests/e2e",
   fullyParallel: true,
   // Audio timing checks need the page's scheduler timer to run on time, so CPU load is kept moderate.
-  workers: 4,
+  // Two workers also keep the run's memory use near 2 GB.
+  workers: 2,
   reporter: "list",
   use: {
     baseURL: BASE_URL,
