@@ -1,4 +1,4 @@
-import { expect, start, stop, test, waitForClicks } from "./fixtures";
+import { beatsOf, expect, expectedNotes, NOTE_120_4, start, stop, test, waitForClicks } from "./fixtures";
 
 declare global {
   interface Window {
@@ -110,19 +110,25 @@ test.describe("stop (Chromium)", () => {
     await start(page);
     const before = (await waitForClicks(page, 1)).length;
     await waitForClicks(page, before + 8);
-    // Presses Stop 3 ms after the onset of a scheduled click, on the audio clock.
-    const { onset, hz, stopAt } = await page.evaluate(async () => {
+    // Presses Stop 3 ms after the onset of a coming click, on the audio clock. Notes are reported once
+    // they start, so the onset is the next one on the grid at least 30 ms ahead.
+    const { previous, steps, onset, stopAt } = await page.evaluate(async (interval) => {
       const ctx = window.__audio.contexts[0];
-      const click = window.__audio.clicks.filter((c) => c.time > ctx.currentTime + 0.03).sort((a, b) => a.time - b.time)[0];
-      const target = click.time + 0.003;
+      const previous = window.__audio.clicks[window.__audio.clicks.length - 1];
+      let steps = 1;
+      while (previous.time + steps * interval <= ctx.currentTime + 0.03) steps++;
+      const onset = previous.time + steps * interval;
+      const target = onset + 0.003;
       while (ctx.currentTime < target - 0.012) await new Promise((r) => setTimeout(r, 1));
       while (ctx.currentTime < target) {
         // Waits for the audio clock to pass the target.
       }
       const at = ctx.currentTime;
       (document.querySelector(".play-button") as HTMLButtonElement).click();
-      return { onset: click.time, hz: click.hz, stopAt: at };
-    });
+      return { previous, steps, onset, stopAt: at };
+    }, NOTE_120_4);
+    // Default settings: every note sounds.
+    const { hz } = expectedNotes(previous, steps, 120, 4, beatsOf([4, 4, 4, 4]))[steps - 1];
     await expect(page.locator(".play-button")).toHaveText("Start");
     await page.waitForTimeout(400);
 
@@ -134,6 +140,14 @@ test.describe("stop (Chromium)", () => {
     expect(stopIndex - onsetAt, "stop lands 3 to 6 ms after the onset").toBeGreaterThanOrEqual(Math.round(0.003 * sampleRate));
     expect(stopIndex - onsetAt).toBeLessThan(Math.round(0.006 * sampleRate));
     expect(x.length).toBeGreaterThan(stopIndex + Math.round(0.3 * sampleRate));
+
+    // The click starts on the grid: the first non-zero sample is within 1 sample after the onset.
+    const exactOnset = onset * sampleRate - startFrame;
+    let first = Math.floor(exactOnset) - 100;
+    expect(x.slice(first, Math.floor(exactOnset) + 1).every((v) => v === 0), "silence before the onset").toBe(true);
+    while (x[first] === 0) first++;
+    expect(first - exactOnset).toBeGreaterThan(0);
+    expect(first - exactOnset).toBeLessThanOrEqual(1);
 
     // The click is sounding when Stop is pressed.
     const peakBefore = Math.max(...x.slice(onsetAt, stopIndex).map(Math.abs));

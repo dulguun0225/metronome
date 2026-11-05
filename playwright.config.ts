@@ -6,7 +6,8 @@ const BASE_URL = `http://127.0.0.1:${PORT}/`;
 export default defineConfig({
   testDir: "tests/e2e",
   fullyParallel: true,
-  // Audio timing checks need the page's scheduler timer to run on time, so CPU load is kept moderate.
+  // Timing checks (the stop fade, the highlight) need the page's timers and animation frames to run on time,
+  // so CPU load is kept moderate.
   // Two workers also keep the run's memory use near 2 GB.
   workers: 2,
   reporter: "list",

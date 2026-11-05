@@ -6,6 +6,7 @@ import {
   defaultBeatSettings,
   defaultSettings,
   loadSettings,
+  MAX_OUTPUT_DELAY,
   parseSettings,
   saveSettings,
   SCHEMA_VERSION,
@@ -65,6 +66,8 @@ describe("defaults", () => {
         { subDivision: 4, levels: levels("accent") },
         { subDivision: 4, levels: levels("accent") },
       ],
+      outputDelayMode: "automatic",
+      manualOutputDelay: null,
     });
   });
 
@@ -88,13 +91,53 @@ describe("storageKey", () => {
 
 describe("parseSettings", () => {
   test("valid data is kept", () => {
-    const data = stored();
+    const data = stored({ outputDelayMode: "manual", manualOutputDelay: 180 });
     expect(parseSettings(data)).toEqual({
       tempo: data.tempo,
       beatCount: data.beatCount,
       volume: data.volume,
       beats: data.beats,
+      outputDelayMode: "manual",
+      manualOutputDelay: 180,
     });
+  });
+
+  test("data without the output delay fields, saved before they existed, gets Automatic", () => {
+    const s = parseSettings(stored());
+    expect(s.outputDelayMode).toBe("automatic");
+    expect(s.manualOutputDelay).toBeNull();
+    expect(s.tempo).toBe(90);
+  });
+
+  test("a manual delay is kept in Automatic mode, for the next switch to Manual", () => {
+    const s = parseSettings(stored({ outputDelayMode: "automatic", manualOutputDelay: 42 }));
+    expect(s.outputDelayMode).toBe("automatic");
+    expect(s.manualOutputDelay).toBe(42);
+  });
+
+  test.each([undefined, null, "Manual", "auto", 1, true, {}])("output delay mode %j gives Automatic", (outputDelayMode) => {
+    expect(parseSettings(stored({ outputDelayMode, manualOutputDelay: 42 })).outputDelayMode).toBe("automatic");
+  });
+
+  test.each([
+    [-10, 0],
+    [501, MAX_OUTPUT_DELAY],
+    [1e9, MAX_OUTPUT_DELAY],
+    [120.4, 120],
+    [0, 0],
+    [500, 500],
+  ])("manual output delay %j is clamped to %j", (manualOutputDelay, expected) => {
+    expect(parseSettings(stored({ outputDelayMode: "manual", manualOutputDelay })).manualOutputDelay).toBe(expected);
+  });
+
+  test.each([undefined, null, "120", NaN, Infinity, {}])("manual output delay %j is no value", (manualOutputDelay) => {
+    expect(parseSettings(stored({ manualOutputDelay })).manualOutputDelay).toBeNull();
+  });
+
+  test("Manual mode without a valid delay gets 0 ms", () => {
+    const s = parseSettings(stored({ outputDelayMode: "manual", manualOutputDelay: "x" }));
+    expect(s.outputDelayMode).toBe("manual");
+    expect(s.manualOutputDelay).toBe(0);
   });
 
   test.each([null, undefined, 42, "text", [], true])("non-object %j gives defaults", (data) => {
@@ -259,6 +302,8 @@ describe("loadSettings and saveSettings", () => {
       { subDivision: 8, levels: ["maxAccent", "normal", "accent", "maxAccent", "normal", "mute", "normal", "normal"] },
       { subDivision: 6, levels: ["mute", "normal", "normal", "mute", "normal", "normal", "normal", "normal"] },
     ],
+    outputDelayMode: "manual",
+    manualOutputDelay: 215,
   };
 
   test("saved settings load back unchanged, including beats beyond the count", () => {
@@ -271,6 +316,13 @@ describe("loadSettings and saveSettings", () => {
     const storage = new MemoryStorage();
     saveSettings(storage, KEY, custom);
     expect(JSON.parse(storage.getItem(KEY)!)).toEqual({ version: SCHEMA_VERSION, ...custom });
+  });
+
+  test("Automatic mode with no manual delay loads back unchanged", () => {
+    const storage = new MemoryStorage();
+    const automatic: SavedSettings = { ...custom, outputDelayMode: "automatic", manualOutputDelay: null };
+    saveSettings(storage, KEY, automatic);
+    expect(loadSettings(storage, KEY)).toEqual(automatic);
   });
 
   test("keys are separate", () => {

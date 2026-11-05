@@ -1,21 +1,27 @@
-import { batch, createEffect, createSignal, Index, on, onCleanup, onMount, type Accessor } from "solid-js";
+import { batch, createEffect, createSignal, Index, on, onCleanup, onMount, Show, type Accessor } from "solid-js";
 import { createStore } from "solid-js/store";
 import Beat from "./Beat";
-import { Metronome, type BeatSettings } from "./metronome";
+import { Metronome, type BeatSettings, type Settings } from "./metronome";
 import {
+  clampOutputDelay,
   clampTempo,
   clampVolume,
   defaultBeatsRange,
   defaultSettings,
   getLocalStorage,
   loadSettings,
+  MAX_OUTPUT_DELAY,
   MAX_TEMPO,
   MIN_TEMPO,
   saveSettings,
   storageKey,
+  type OutputDelayMode,
 } from "./settings";
 import { tapTempo } from "./tapTempo";
 import { ScreenWakeLock } from "./wakeLock";
+
+// How often the output delay the browser reports is read for display, in ms.
+const REPORTED_DELAY_INTERVAL_MS = 500;
 
 // Input types that are not typed into; key presses on them are not text entry.
 const NON_TEXT_INPUT_TYPES = new Set(["button", "checkbox", "radio", "range", "submit", "reset", "color", "file", "image"]);
@@ -76,17 +82,46 @@ export default function App() {
   const [beats, setBeats] = createStore<BeatSettings[]>(saved.beats);
   const [activeBeat, setActiveBeat] = createSignal<number | null>(null);
   const [activeSub, setActiveSub] = createSignal<number | null>(null);
+  const [outputDelayMode, setOutputDelayMode] = createSignal<OutputDelayMode>(saved.outputDelayMode);
+  const [manualOutputDelay, setManualOutputDelay] = createSignal<number | null>(saved.manualOutputDelay);
+  // Output delay the browser reports, in whole ms, or null when it reports none.
+  const [reportedDelay, setReportedDelay] = createSignal<number | null>(null);
 
-  const metronome = new Metronome(
-    () => ({ tempo: tempo(), beatCount: beatCount(), beats }),
-    (pos) =>
-      batch(() => {
-        setActiveBeat(pos?.beat ?? null);
-        setActiveSub(pos?.sub ?? null);
-      }),
+  // Plain copies of the playback settings, as the metronome sends them to the audio thread.
+  const playbackSettings = (): Settings => ({
+    tempo: tempo(),
+    beatCount: beatCount(),
+    beats: beats.map((b) => ({ subDivision: b.subDivision, levels: [...b.levels] })),
+  });
+  const metronome = new Metronome(playbackSettings(), (pos) =>
+    batch(() => {
+      setActiveBeat(pos?.beat ?? null);
+      setActiveSub(pos?.sub ?? null);
+    }),
   );
   onCleanup(() => metronome.dispose());
   createEffect(() => metronome.setVolume(volume()));
+  // Settings reach the audio thread when they change, and apply from the next note.
+  createEffect(() => metronome.setSettings(playbackSettings()));
+  createEffect(() => metronome.setOutputDelay(outputDelayMode() === "manual" ? (manualOutputDelay() ?? 0) / 1000 : null));
+
+  const readReportedDelay = () => {
+    const seconds = metronome.reportedOutputDelay();
+    setReportedDelay(seconds === null ? null : Math.round(seconds * 1000));
+  };
+  const reportedDelayTimer = setInterval(readReportedDelay, REPORTED_DELAY_INTERVAL_MS);
+  onCleanup(() => clearInterval(reportedDelayTimer));
+
+  // The first switch to Manual starts the slider at the delay the browser reports.
+  function changeOutputDelayMode(mode: OutputDelayMode) {
+    batch(() => {
+      if (mode === "manual" && manualOutputDelay() === null) {
+        const seconds = metronome.reportedOutputDelay();
+        setManualOutputDelay(clampOutputDelay(seconds === null ? 0 : Math.round(seconds * 1000)));
+      }
+      setOutputDelayMode(mode);
+    });
+  }
 
   // Saves the settings whenever one changes. Not on load, so stored data of another schema version stays until then.
   createEffect(
@@ -96,6 +131,8 @@ export default function App() {
         beatCount: beatCount(),
         volume: volume(),
         beats: beats.map((b) => ({ subDivision: b.subDivision, levels: [...b.levels] })),
+        outputDelayMode: outputDelayMode(),
+        manualOutputDelay: manualOutputDelay(),
       }),
       (settings) => saveSettings(storage, settingsKey, settings),
       { defer: true },
@@ -129,6 +166,8 @@ export default function App() {
       setBeatCount(defaults.beatCount);
       setTempo(defaults.tempo);
       setVolume(defaults.volume);
+      setOutputDelayMode(defaults.outputDelayMode);
+      setManualOutputDelay(defaults.manualOutputDelay);
     });
   }
 
@@ -143,6 +182,7 @@ export default function App() {
     } else {
       metronome.start();
       wakeLock.enable();
+      readReportedDelay();
     }
     setPlaying((p) => !p);
   }
@@ -339,6 +379,63 @@ export default function App() {
             </svg>
             <span>Reset</span>
           </button>
+        </div>
+
+        <div class="delay">
+          <div class="delay-row">
+            <fieldset class="segmented delay-mode">
+              <legend>Output delay</legend>
+              <div class="segmented-track">
+                <label class="segment">
+                  <input
+                    type="radio"
+                    name="output-delay-mode"
+                    value="automatic"
+                    aria-describedby="delay-reported"
+                    checked={outputDelayMode() === "automatic"}
+                    onChange={() => changeOutputDelayMode("automatic")}
+                  />
+                  <span>Automatic</span>
+                </label>
+                <label class="segment">
+                  <input
+                    type="radio"
+                    name="output-delay-mode"
+                    value="manual"
+                    checked={outputDelayMode() === "manual"}
+                    onChange={() => changeOutputDelayMode("manual")}
+                  />
+                  <span>Manual</span>
+                </label>
+              </div>
+            </fieldset>
+            <span id="delay-reported" class="delay-reported">
+              {reportedDelay() === null ? "not reported" : `browser reports ${reportedDelay()} ms`}
+            </span>
+            <Show when={outputDelayMode() === "manual"}>
+              <div class="delay-slider-row">
+                <input
+                  class="slider delay-slider"
+                  type="range"
+                  aria-label="Manual output delay"
+                  aria-valuetext={`${manualOutputDelay() ?? 0} ms`}
+                  min="0"
+                  max={MAX_OUTPUT_DELAY}
+                  step="1"
+                  value={manualOutputDelay() ?? 0}
+                  style={{ "--fill": `${((manualOutputDelay() ?? 0) / MAX_OUTPUT_DELAY) * 100}%` }}
+                  onInput={(e) => setManualOutputDelay(clampOutputDelay(Math.round(e.currentTarget.valueAsNumber)))}
+                />
+                <span class="delay-value" aria-hidden="true">
+                  {manualOutputDelay() ?? 0} ms
+                </span>
+              </div>
+            </Show>
+          </div>
+          <p class="delay-help">
+            Bluetooth headphones and speakers usually add 40–300 ms. If the light and click don't line up, choose Manual
+            and move the slider until they do.
+          </p>
         </div>
       </section>
 

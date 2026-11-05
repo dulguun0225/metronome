@@ -7,10 +7,16 @@ export const DEFAULT_TEMPO = 120;
 export const DEFAULT_BEAT_COUNT = 4;
 // Master volume 0.8 with a max accent click gain of 1.0 gives the loudest click its former peak gain.
 export const DEFAULT_VOLUME = 0.8;
+// Largest manual output delay, in ms.
+export const MAX_OUTPUT_DELAY = 500;
 
 // Version of the stored format; stored data with any other version, including version 1
 // (per-subdivision on/off flags and a per-beat accent), is ignored.
 export const SCHEMA_VERSION = 2;
+
+// How the beat highlight is delayed to match the sound: by the output delay the browser reports, or
+// by a delay the user sets.
+export type OutputDelayMode = "automatic" | "manual";
 
 export interface SavedSettings {
   tempo: number;
@@ -19,6 +25,9 @@ export interface SavedSettings {
   volume: number;
   // Settings for every beat ever shown, including those beyond beatCount; at least beatCount entries.
   beats: BeatSettings[];
+  outputDelayMode: OutputDelayMode;
+  // Manual output delay in ms, 0 to MAX_OUTPUT_DELAY; null until Manual is first chosen.
+  manualOutputDelay: number | null;
 }
 
 export function defaultBeatSettings(index: number): BeatSettings {
@@ -39,6 +48,8 @@ export function defaultSettings(): SavedSettings {
     beatCount: DEFAULT_BEAT_COUNT,
     volume: DEFAULT_VOLUME,
     beats: defaultBeatsRange(0, DEFAULT_BEAT_COUNT),
+    outputDelayMode: "automatic",
+    manualOutputDelay: null,
   };
 }
 
@@ -48,6 +59,10 @@ export function clampTempo(n: number) {
 
 export function clampVolume(n: number) {
   return Math.min(1, Math.max(0, n));
+}
+
+export function clampOutputDelay(n: number) {
+  return Math.min(MAX_OUTPUT_DELAY, Math.max(0, n));
 }
 
 // Sites on one origin (e.g. GitHub Pages project sites) share localStorage, so the key
@@ -95,6 +110,12 @@ export function parseSettings(data: unknown): SavedSettings {
   // the bound also keeps a corrupt count from creating a huge number of beats.
   settings.beatCount = readInteger(data.beatCount, 1, Math.max(DEFAULT_BEAT_COUNT, beats.length)) ?? settings.beatCount;
   settings.beats = [...beats, ...defaultBeatsRange(beats.length, settings.beatCount)];
+  // Data saved before the output delay setting existed has neither field and gets Automatic.
+  settings.manualOutputDelay = readInteger(data.manualOutputDelay, 0, MAX_OUTPUT_DELAY);
+  if (data.outputDelayMode === "manual") {
+    settings.outputDelayMode = "manual";
+    settings.manualOutputDelay ??= 0;
+  }
   return settings;
 }
 
@@ -123,6 +144,8 @@ export function saveSettings(storage: Pick<Storage, "setItem"> | null, key: stri
     beatCount: settings.beatCount,
     volume: settings.volume,
     beats: settings.beats.map((b) => ({ subDivision: b.subDivision, levels: [...b.levels] })),
+    outputDelayMode: settings.outputDelayMode,
+    manualOutputDelay: settings.manualOutputDelay,
   };
   try {
     storage?.setItem(key, JSON.stringify(data));

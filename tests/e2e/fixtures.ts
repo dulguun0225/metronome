@@ -1,23 +1,25 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
-import { nextPosition, type BeatSettings, type Level, type Position } from "../../src/metronome";
+import { nextPosition, PROCESSOR_NAME, type BeatSettings, type Level, type NoteReport, type Position } from "../../src/clickGenerator";
 
 export { expect };
 
-// A click as scheduled by the app: oscillator start time (audio clock seconds), frequency, and the
-// peak gain of the click's own gain node (before the master volume).
-export interface Click {
-  time: number;
-  hz: number;
-  peak: number;
-}
+// A note the app's AudioWorklet reported: onset (audio clock seconds), position, and the pitch and peak
+// gain of its click (before the master volume), both 0 for a muted note.
+export type Note = NoteReport;
+// A note that sounds.
+export type Click = NoteReport;
 
 declare global {
   interface Window {
     __audio: {
+      // Every note the app received from its click worklet, and those of them that sound.
+      notes: Note[];
       clicks: Click[];
       contexts: AudioContext[];
       // Gain nodes connected to the destination: one master output per run.
       outputs: GainNode[];
+      // URLs of the AudioWorklet modules loaded.
+      modules: string[];
       // Last gain value the app set on the latest output node, or null before the first run.
       outputGain(): number | null;
       currentTime(): number;
@@ -34,50 +36,73 @@ declare global {
   }
 }
 
-// Init script: records what the app schedules on Web Audio. Runs in the page, so it must not use outer variables.
-function recordAudio() {
+// Init script: records the app's Web Audio use and the notes its click worklet reports, as the app
+// receives them. Runs in the page, so it must not use outer variables.
+function recordAudio(processorName: string) {
+  const notes: Note[] = [];
   const clicks: Click[] = [];
   const contexts: AudioContext[] = [];
   const outputs: GainNode[] = [];
+  const modules: string[] = [];
   const sessionTypes: (string | null)[] = [];
   const lastValue = new WeakMap<AudioParam, number>();
-  const peak = new WeakMap<AudioParam, number>();
-  const gainOf = new WeakMap<AudioNode, GainNode>();
 
   const param = AudioParam.prototype as unknown as Record<string, (...args: number[]) => AudioParam>;
-  const record = (p: AudioParam, v: number) => {
-    lastValue.set(p, v);
-    peak.set(p, Math.max(peak.get(p) ?? -Infinity, v));
-  };
   const value = Object.getOwnPropertyDescriptor(AudioParam.prototype, "value")!;
   Object.defineProperty(AudioParam.prototype, "value", {
     ...value,
     set(this: AudioParam, v: number) {
-      record(this, v);
+      lastValue.set(this, v);
       value.set!.call(this, v);
     },
   });
   for (const name of ["setValueAtTime", "linearRampToValueAtTime", "exponentialRampToValueAtTime", "setTargetAtTime"]) {
     const original = param[name];
     param[name] = function (this: AudioParam, v: number, ...rest: number[]) {
-      record(this, v);
+      lastValue.set(this, v);
       return original.call(this, v, ...rest);
     };
   }
 
   const connect = AudioNode.prototype.connect as (this: AudioNode, ...args: unknown[]) => unknown;
   AudioNode.prototype.connect = function (this: AudioNode, ...args: unknown[]) {
-    const dest = args[0];
-    if (this instanceof OscillatorNode && dest instanceof GainNode) gainOf.set(this, dest);
-    if (this instanceof GainNode && dest instanceof AudioDestinationNode) outputs.push(this);
+    if (this instanceof GainNode && args[0] instanceof AudioDestinationNode) outputs.push(this);
     return connect.apply(this, args);
   } as AudioNode["connect"];
 
-  const start = AudioScheduledSourceNode.prototype.start;
-  OscillatorNode.prototype.start = function (this: OscillatorNode, when?: number) {
-    const gain = gainOf.get(this);
-    clicks.push({ time: when ?? 0, hz: this.frequency.value, peak: gain ? (peak.get(gain.gain) ?? NaN) : NaN });
-    return start.call(this, when);
+  const addModule = AudioWorklet.prototype.addModule;
+  AudioWorklet.prototype.addModule = function (this: AudioWorklet, url: string | URL, options?: WorkletOptions) {
+    modules.push(String(url));
+    return addModule.call(this, url, options);
+  };
+
+  // The messages of the app's click node are recorded when they reach the handler the app sets, so
+  // nothing is recorded after the app removes it on stop.
+  const onmessage = Object.getOwnPropertyDescriptor(MessagePort.prototype, "onmessage")!;
+  const OriginalNode = window.AudioWorkletNode;
+  window.AudioWorkletNode = class extends OriginalNode {
+    constructor(context: BaseAudioContext, name: string, options?: AudioWorkletNodeOptions) {
+      super(context, name, options);
+      if (name !== processorName) return;
+      const port = this.port;
+      Object.defineProperty(port, "onmessage", {
+        configurable: true,
+        get: () => onmessage.get!.call(port),
+        set: (handler: ((e: MessageEvent) => void) | null) => {
+          onmessage.set!.call(
+            port,
+            handler &&
+              ((e: MessageEvent<Note[]>) => {
+                for (const note of e.data) {
+                  notes.push(note);
+                  if (note.peak > 0) clicks.push(note);
+                }
+                handler(e);
+              }),
+          );
+        },
+      });
+    }
   };
 
   const Original = window.AudioContext;
@@ -91,9 +116,11 @@ function recordAudio() {
   };
 
   window.__audio = {
+    notes,
     clicks,
     contexts,
     outputs,
+    modules,
     sessionTypes,
     outputGain() {
       const output = outputs[outputs.length - 1];
@@ -165,7 +192,7 @@ export const test = base.extend({
   page: async ({ page }, use) => {
     const errors: Error[] = [];
     page.on("pageerror", (error) => errors.push(error));
-    await page.addInitScript(recordAudio);
+    await page.addInitScript(recordAudio, PROCESSOR_NAME);
     await page.addInitScript(stubWakeLock);
     await use(page);
     expect(errors, "uncaught page errors").toEqual([]);
@@ -245,13 +272,18 @@ export function clicks(page: Page): Promise<Click[]> {
   return page.evaluate(() => window.__audio.clicks.slice());
 }
 
+export function notes(page: Page): Promise<Note[]> {
+  return page.evaluate(() => window.__audio.notes.slice());
+}
+
 export function clearClicks(page: Page) {
   return page.evaluate(() => {
     window.__audio.clicks.length = 0;
+    window.__audio.notes.length = 0;
   });
 }
 
-// Waits until at least `count` clicks are scheduled and returns them all.
+// Waits until at least `count` clicks are reported and returns them all.
 export async function waitForClicks(page: Page, count: number, timeout = 15_000): Promise<Click[]> {
   await page.waitForFunction((n) => window.__audio.clicks.length >= n, count, { timeout });
   return clicks(page);
@@ -272,7 +304,7 @@ export interface ExpectedNote extends Position {
   peak: number;
 }
 
-// The notes the scheduler plays after `from` under fixed settings, with no subdivision muted.
+// The notes the metronome plays after `from` under fixed settings, with no subdivision muted.
 export function expectedNotes(from: ExpectedNote, count: number, tempo: number, beatCount: number, beats: BeatSettings[]) {
   const out: ExpectedNote[] = [];
   let prev = from;
@@ -296,8 +328,9 @@ export function beatsOf(subDivisions: number[], maxAccents: boolean[] = subDivis
   }));
 }
 
-// Summary of the visible settings: tempo, count, volume and per beat "subdivision:levels", with one digit
-// per shown subdivision: 0 mute, 1 normal, 2 accent, 3 max accent.
+// Summary of the visible settings: tempo, count, volume, per beat "subdivision:levels", with one digit
+// per shown subdivision: 0 mute, 1 normal, 2 accent, 3 max accent, and the output delay: "automatic" or
+// "manual:" and the slider value.
 export function appState(page: Page) {
   return page.evaluate(() => ({
     tempo: (document.querySelector("#tempo") as HTMLInputElement).value,
@@ -310,6 +343,9 @@ export function appState(page: Page) {
       const levels = [...b.querySelectorAll<HTMLElement>(".sub")].map((s) => digits.indexOf(s.dataset.level ?? "")).join("");
       return `${sub}:${levels}`;
     }),
+    delay: (document.querySelector("input[name=output-delay-mode]:checked") as HTMLInputElement).value === "manual"
+      ? `manual:${(document.querySelector(".delay-slider") as HTMLInputElement).value}`
+      : "automatic",
   }));
 }
 
@@ -319,4 +355,5 @@ export const DEFAULT_STATE = {
   count: "4",
   volume: "80",
   beats: ["4:3111", "4:2111", "4:2111", "4:2111"],
+  delay: "automatic",
 };

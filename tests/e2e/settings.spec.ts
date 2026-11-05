@@ -22,7 +22,8 @@ import type { Page } from "@playwright/test";
 
 const KEY = "metronome:/:settings";
 
-// Tempo 87, volume 35, six beats with custom subdivisions and levels, then the count lowered to 3.
+// Tempo 87, volume 35, a manual output delay of 120 ms, six beats with custom subdivisions and levels,
+// then the count lowered to 3.
 async function customize(page: Page) {
   await commit(tempoField(page), 87);
   await commit(countField(page), 6);
@@ -35,6 +36,8 @@ async function customize(page: Page) {
   await setSub(page, 2, 0, "maxAccent");
   await setSub(page, 5, 0, "maxAccent");
   await slide(volumeSlider(page), 35);
+  await page.locator("input[name=output-delay-mode][value=manual]").check();
+  await slide(page.locator(".delay-slider"), 120);
   await commit(countField(page), 3);
   await expect(page.locator(".beat")).toHaveCount(3);
 }
@@ -45,6 +48,7 @@ const CUSTOM_3 = {
   count: "3",
   volume: "35",
   beats: ["3:201", "8:21231011", "4:3111"],
+  delay: "manual:120",
 };
 const CUSTOM_6 = { ...CUSTOM_3, count: "6", beats: [...CUSTOM_3.beats, "4:2111", "2:01", "6:311011"] };
 
@@ -81,7 +85,7 @@ test("Reset restores every default, also while playing", async ({ page }) => {
   await expect(playButton(page)).toHaveText("Stop");
   expect(await appState(page)).toEqual(DEFAULT_STATE);
   await clearClicks(page);
-  // Wait past notes scheduled before the reset, then check the default bar.
+  // Wait past notes started before the reset, then check the default bar.
   const list = (await waitForClicks(page, 24)).slice(4);
   const indices = gridIndices(list, NOTE_120_4);
   expect(indices).toEqual(list.map((_, i) => i));
@@ -101,7 +105,7 @@ test("settings survive a reload; playing state does not", async ({ page }) => {
   expect(await appState(page)).toEqual(CUSTOM_6);
 
   const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "null"), KEY);
-  expect(stored).toMatchObject({ version: 2, tempo: 87, beatCount: 6, volume: 0.35 });
+  expect(stored).toMatchObject({ version: 2, tempo: 87, beatCount: 6, volume: 0.35, outputDelayMode: "manual", manualOutputDelay: 120 });
   expect(stored.beats).toHaveLength(6);
   expect(stored.beats[1]).toEqual({
     subDivision: 8,
@@ -117,6 +121,8 @@ test("settings survive a reload; playing state does not", async ({ page }) => {
     tempo: 120,
     beatCount: 4,
     volume: 0.8,
+    outputDelayMode: "automatic",
+    manualOutputDelay: null,
   });
 });
 
@@ -130,6 +136,8 @@ test("stored data with bad fields is clamped or replaced by defaults", async ({ 
         beatCount: 2,
         volume: "loud",
         beats: [{ subDivision: 12, levels: ["mute", "loud"] }, null],
+        outputDelayMode: "manual",
+        manualOutputDelay: 9999,
       }),
     );
   }, KEY);
@@ -140,6 +148,7 @@ test("stored data with bad fields is clamped or replaced by defaults", async ({ 
     count: "2",
     volume: "80",
     beats: ["8:31111111", "4:2111"],
+    delay: "manual:500",
   });
 
   await page.evaluate((key) => localStorage.setItem(key, "{not json"), KEY);

@@ -1,5 +1,7 @@
-// How a subdivision sounds: not at all, or with a click of rising pitch and gain.
-export type Level = "mute" | "normal" | "accent" | "maxAccent";
+import { PROCESSOR_NAME, type Level, type NoteReport, type Position, type ProcessorMessage, type ProcessorOptions, type Settings } from "./clickGenerator";
+import workletCode from "./clickWorklet.ts?worklet";
+
+export { nextPosition, type BeatSettings, type Level, type Position, type Settings } from "./clickGenerator";
 
 // Every level, from lowest to highest.
 export const LEVELS: readonly Level[] = ["mute", "normal", "accent", "maxAccent"];
@@ -13,54 +15,12 @@ export function levelAtPosition(y: number, height: number): Level {
   return LEVELS[LEVELS.length - 1 - fromTop];
 }
 
-export interface BeatSettings {
-  subDivision: number;
-  // One level per possible subdivision; only the first `subDivision` levels are used.
-  levels: Level[];
-}
-
-export interface Position {
-  beat: number;
-  sub: number;
-}
-
-export interface Settings {
-  tempo: number;
-  beatCount: number;
-  beats: readonly BeatSettings[];
-}
-
-interface ScheduledNote extends Position {
-  time: number;
-}
-
-// Scheduler timing, in seconds unless noted.
-const TICK_MS = 25;
-const LOOKAHEAD = 0.1;
-const START_DELAY = 0.05;
-
-// Click sound. Peak gain of each click, relative to the master volume.
-const ATTACK = 0.002;
-const DECAY = 0.04;
-const MAX_ACCENT_GAIN = 1;
-const ACCENT_GAIN = 0.7;
-const NORMAL_GAIN = 0.5;
 // Time constant of master volume changes, so a change during a click does not make it crackle.
 const VOLUME_TIME_CONSTANT = 0.01;
 // Stop fades the run's output out with this time constant, then disconnects it after STOP_DISCONNECT_MS,
 // when the gain is below 1e-3 of its value, so a click cut mid-envelope does not pop.
 const STOP_TIME_CONSTANT = 0.002;
 const STOP_DISCONNECT_MS = 15;
-const MAX_ACCENT_HZ = 1760;
-const ACCENT_HZ = 1320;
-const NORMAL_HZ = 880;
-
-// Pitch and peak gain of the click of each level that sounds.
-const CLICKS: Record<Exclude<Level, "mute">, { hz: number; gain: number }> = {
-  normal: { hz: NORMAL_HZ, gain: NORMAL_GAIN },
-  accent: { hz: ACCENT_HZ, gain: ACCENT_GAIN },
-  maxAccent: { hz: MAX_ACCENT_HZ, gain: MAX_ACCENT_GAIN },
-};
 
 // Audio Session API (Safari): the "playback" type makes audio play with the iPhone silent switch on.
 interface AudioSessionNavigator {
@@ -77,38 +37,75 @@ function setAudioSessionToPlayback() {
   }
 }
 
-function subDivisionOf(beats: readonly BeatSettings[], beat: number): number {
-  return Math.max(1, beats[beat]?.subDivision ?? 1);
+// The worklet module as a data: URL. Chromium does not load a worklet module from a Blob URL on a
+// file:// page (an opaque origin), but loads a data: URL there as on http(s).
+const WORKLET_URL = `data:text/javascript,${encodeURIComponent(workletCode)}`;
+
+function isTime(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-// Returns the position that follows `pos` under the current settings.
-// A beat index outside the bar wraps to the first beat; a subdivision index at or past
-// the beat's subdivision count moves to the next beat.
-export function nextPosition(pos: Position, beatCount: number, beats: readonly BeatSettings[]): Position {
-  if (pos.beat >= beatCount) return { beat: 0, sub: 0 };
-  if (pos.sub + 1 < subDivisionOf(beats, pos.beat)) return { beat: pos.beat, sub: pos.sub + 1 };
-  return { beat: (pos.beat + 1) % beatCount, sub: 0 };
+// How much later than performance.now() an output timestamp's performanceTime may be, in ms, from the
+// reduced precision of both.
+const TIMESTAMP_TOLERANCE_MS = 1;
+
+// The context time of the audio at the output device now, by what the browser reports, or null when it
+// reports nothing usable. currentTime is the time of the audio being rendered, which plays later.
+// getOutputTimestamp() gives the time of the frame at the output device (contextTime) and the
+// performance.now() time it was there (performanceTime), both 0 before the first render; Chromium
+// updates it once per device callback, so it is extrapolated to now. Firefox reports contextTime as
+// currentTime - outputLatency but also moves performanceTime back by outputLatency, so the
+// extrapolation gives currentTime there; the bound of currentTime - outputLatency keeps the latency.
+// WebKit (WPE WebKit 27.2) reports a performanceTime later than now by about the context time, which
+// would keep the time near 0, so a timestamp later than now is not used.
+// Without a timestamp, the time is currentTime - baseLatency - outputLatency, missing values taken as 0.
+function reportedHeardTime(ctx: AudioContext): number | null {
+  const now = ctx.currentTime;
+  const base = isTime(ctx.baseLatency) ? ctx.baseLatency : null;
+  const output = isTime(ctx.outputLatency) ? ctx.outputLatency : null;
+  const stamp = typeof ctx.getOutputTimestamp === "function" ? ctx.getOutputTimestamp() : null;
+  const performanceNow = performance.now();
+  if (
+    stamp &&
+    isTime(stamp.contextTime) &&
+    isTime(stamp.performanceTime) &&
+    stamp.contextTime > 0 &&
+    stamp.performanceTime > 0 &&
+    stamp.performanceTime <= performanceNow + TIMESTAMP_TOLERANCE_MS
+  ) {
+    const extrapolated = stamp.contextTime + (performanceNow - stamp.performanceTime) / 1000;
+    return Math.min(extrapolated, now - (output ?? 0));
+  }
+  if (base === null && output === null) return null;
+  return now - (base ?? 0) - (output ?? 0);
 }
 
-// Lookahead scheduler: a timer schedules every note that falls within LOOKAHEAD seconds of
-// the audio clock, and an animation frame loop reports the note currently sounding.
+// The audio nodes of one run, from start to stop. The click node is null until the worklet module has loaded.
+interface Run {
+  output: GainNode;
+  node: AudioWorkletNode | null;
+}
+
+// Plays the clicks from an AudioWorklet (clickWorklet.ts), which reports every note it starts; an
+// animation frame loop shows the latest note whose onset has reached the output device.
 export class Metronome {
-  #readSettings: () => Settings;
+  #settings: Settings;
   #onActive: (pos: Position | null) => void;
   #ctx: AudioContext | null = null;
-  #output: GainNode | null = null;
+  // Loading of the worklet module into #ctx; resolves to false when it failed.
+  #module: Promise<boolean> | undefined;
+  #run: Run | null = null;
   #volume = 1;
-  #timer: ReturnType<typeof setInterval> | undefined;
+  // Manual output delay in seconds, or null to use the delay the browser reports.
+  #outputDelay: number | null = null;
   #frame: number | undefined;
-  #last: ScheduledNote | null = null;
-  #startTime = 0;
-  // Scheduled notes not yet reached by the audio clock, in time order.
-  #queue: ScheduledNote[] = [];
-  // Oscillators of the current run that may not have started yet, so stop() can cancel them.
-  #pending: { osc: OscillatorNode; time: number }[] = [];
+  // Reported notes not yet shown, in time order. Notes also arrive while no animation frame runs (a hidden
+  // page), so of the notes the heard time has reached, only the latest is kept.
+  #queue: NoteReport[] = [];
 
-  constructor(readSettings: () => Settings, onActive: (pos: Position | null) => void) {
-    this.#readSettings = readSettings;
+  // `settings` must be plain data, as it is copied to the audio thread.
+  constructor(settings: Settings, onActive: (pos: Position | null) => void) {
+    this.#settings = settings;
     this.#onActive = onActive;
   }
 
@@ -119,100 +116,116 @@ export class Metronome {
     this.#ctx ??= new AudioContext();
     const ctx = this.#ctx;
     void ctx.resume();
-    // A fresh output node per run, so stop() can silence notes already scheduled. Its gain is the master volume.
-    this.#output = ctx.createGain();
-    this.#output.gain.value = this.#volume;
-    this.#output.connect(ctx.destination);
-    this.#last = null;
-    this.#startTime = ctx.currentTime + START_DELAY;
-    this.#schedule();
-    this.#timer = setInterval(() => this.#schedule(), TICK_MS);
+    // A fresh output node per run, so stop() can fade out the clicks sounding. Its gain is the master volume.
+    const output = ctx.createGain();
+    output.gain.value = this.#volume;
+    output.connect(ctx.destination);
+    const run: Run = { output, node: null };
+    this.#run = run;
+    // The click node is created once the module has loaded, unless the run has stopped by then.
+    this.#module ??= this.#loadModule(ctx);
+    void this.#module.then((loaded) => {
+      if (loaded && this.#run === run) this.#startClicks(ctx, run);
+    });
     this.#frame = requestAnimationFrame(this.#draw);
   }
 
   stop() {
-    clearInterval(this.#timer);
-    this.#timer = undefined;
     if (this.#frame !== undefined) cancelAnimationFrame(this.#frame);
     this.#frame = undefined;
     const ctx = this.#ctx;
-    const output = this.#output;
-    if (ctx && output) {
-      const now = ctx.currentTime;
-      // Notes that have not started do not sound; the ones sounding fade out. Volume changes use
+    const run = this.#run;
+    if (ctx && run) {
+      // The worklet starts no further notes; the clicks sounding fade out. Volume changes use
       // setTargetAtTime from the current time too, so this later event takes over from them.
-      for (const { osc, time } of this.#pending) if (time > now) osc.stop(now);
-      output.gain.setTargetAtTime(0, now, STOP_TIME_CONSTANT);
-      setTimeout(() => output.disconnect(), STOP_DISCONNECT_MS);
+      run.output.gain.setTargetAtTime(0, ctx.currentTime, STOP_TIME_CONSTANT);
+      setTimeout(() => run.output.disconnect(), STOP_DISCONNECT_MS);
+      if (run.node) {
+        run.node.port.onmessage = null;
+        run.node.port.postMessage({ type: "stop" } satisfies ProcessorMessage);
+      }
     }
-    this.#pending = [];
-    this.#output = null;
+    this.#run = null;
     this.#queue = [];
-    this.#last = null;
     this.#onActive(null);
+  }
+
+  // Applies from the next note that has not started, also during playback. `settings` must be plain data.
+  setSettings(settings: Settings) {
+    this.#settings = settings;
+    this.#run?.node?.port.postMessage({ type: "settings", settings } satisfies ProcessorMessage);
   }
 
   // Master volume, 0 to 1; applies at once, also during playback.
   setVolume(volume: number) {
     this.#volume = volume;
-    if (this.#ctx && this.#output) this.#output.gain.setTargetAtTime(volume, this.#ctx.currentTime, VOLUME_TIME_CONSTANT);
+    if (this.#ctx && this.#run) this.#run.output.gain.setTargetAtTime(volume, this.#ctx.currentTime, VOLUME_TIME_CONSTANT);
+  }
+
+  // Delay in seconds from rendering a note to showing it, or null for the delay the browser reports.
+  setOutputDelay(seconds: number | null) {
+    this.#outputDelay = seconds;
+  }
+
+  // The output delay the browser reports, in seconds, or null when it reports none or before the first start.
+  reportedOutputDelay(): number | null {
+    const ctx = this.#ctx;
+    const heard = ctx ? reportedHeardTime(ctx) : null;
+    return ctx && heard !== null ? Math.max(0, ctx.currentTime - heard) : null;
   }
 
   dispose() {
     this.stop();
     void this.#ctx?.close();
     this.#ctx = null;
+    this.#module = undefined;
   }
 
-  #schedule() {
-    const ctx = this.#ctx;
-    const output = this.#output;
-    if (!ctx || !output) return;
-    const horizon = ctx.currentTime + LOOKAHEAD;
-    this.#pending = this.#pending.filter((p) => p.time > ctx.currentTime);
-    for (;;) {
-      // Settings are read for every note, so changes apply from the next unscheduled note.
-      const { tempo, beatCount, beats } = this.#readSettings();
-      let note: ScheduledNote;
-      if (this.#last === null) {
-        note = { time: this.#startTime, beat: 0, sub: 0 };
-      } else {
-        const interval = 60 / tempo / subDivisionOf(beats, this.#last.beat);
-        note = { time: this.#last.time + interval, ...nextPosition(this.#last, beatCount, beats) };
-      }
-      if (note.time >= horizon) return;
-      // After a timer stall (e.g. a background tab), continue from now instead of playing a burst of late notes.
-      if (note.time < ctx.currentTime) note.time = ctx.currentTime;
-      const level = beats[note.beat]?.levels[note.sub] ?? "mute";
-      if (level !== "mute") this.#click(ctx, output, note.time, CLICKS[level].hz, CLICKS[level].gain);
-      // Muted subdivisions are queued too, so their position is still shown.
-      this.#queue.push(note);
-      this.#last = note;
-    }
+  #loadModule(ctx: AudioContext): Promise<boolean> {
+    const loading = ctx.audioWorklet.addModule(WORKLET_URL).then(
+      () => true,
+      (error: unknown) => {
+        console.error("Loading the click AudioWorklet failed", error);
+        // The next start tries again.
+        if (this.#module === loading) this.#module = undefined;
+        return false;
+      },
+    );
+    return loading;
   }
 
-  #click(ctx: AudioContext, output: AudioNode, time: number, hz: number, peak: number) {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = hz;
-    gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(peak, time + ATTACK);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + ATTACK + DECAY);
-    osc.connect(gain);
-    gain.connect(output);
-    osc.start(time);
-    osc.stop(time + ATTACK + DECAY);
-    this.#pending.push({ osc, time });
+  #startClicks(ctx: AudioContext, run: Run) {
+    const processorOptions: ProcessorOptions = { settings: this.#settings };
+    const node = new AudioWorkletNode(ctx, PROCESSOR_NAME, { numberOfInputs: 0, outputChannelCount: [1], processorOptions });
+    node.port.onmessage = (e: MessageEvent<NoteReport[]>) => {
+      this.#queue.push(...e.data);
+      const reached = this.#reachedCount(ctx);
+      if (reached > 1) this.#queue.splice(0, reached - 1);
+    };
+    node.connect(run.output);
+    run.node = node;
+  }
+
+  // Number of queued notes whose onsets the audio heard now has reached: the audio at currentTime less the
+  // manual output delay, or at the time the browser reports.
+  #reachedCount(ctx: AudioContext): number {
+    const heard = this.#outputDelay !== null ? ctx.currentTime - this.#outputDelay : (reportedHeardTime(ctx) ?? ctx.currentTime);
+    let count = 0;
+    while (count < this.#queue.length && this.#queue[count].time <= heard) count++;
+    return count;
   }
 
   // Arrow function so it can be passed to requestAnimationFrame directly.
   #draw = () => {
     const ctx = this.#ctx;
     if (!ctx) return;
-    // The latest note the audio clock has reached is the one sounding; older ones are dropped.
-    let current: ScheduledNote | undefined;
-    while (this.#queue.length > 0 && this.#queue[0].time <= ctx.currentTime) current = this.#queue.shift();
-    if (current) this.#onActive({ beat: current.beat, sub: current.sub });
+    // The latest note that has reached the output device is the one sounding; older ones are dropped.
+    const reached = this.#reachedCount(ctx);
+    if (reached > 0) {
+      const current = this.#queue[reached - 1];
+      this.#queue.splice(0, reached);
+      this.#onActive({ beat: current.beat, sub: current.sub });
+    }
     this.#frame = requestAnimationFrame(this.#draw);
   };
 }

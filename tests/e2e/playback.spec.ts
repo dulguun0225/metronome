@@ -21,8 +21,8 @@ import {
   volumeSlider,
   waitForClicks,
   type Click,
-  type ExpectedNote,
 } from "./fixtures";
+import type { BeatSettings } from "../../src/clickGenerator";
 
 // Pitch and peak gain of note `i` of a 4/4 bar with 4 subdivisions per beat and default levels, given the beats
 // whose first subdivision is at max accent (the others are at accent).
@@ -89,41 +89,37 @@ test("a muted note is silent but still highlighted", async ({ page }) => {
   await stop(page);
 });
 
+// A change reaches the audio thread within this time, in seconds of the audio clock: every note from
+// this long after the change on follows the new settings.
+const CHANGE_DELAY = 0.05;
+
+// Whether click `i` is the note that follows click `i - 1` under the given settings: its position,
+// pitch, gain and onset.
+function follows(list: Click[], i: number, tempo: number, beatCount: number, beats: BeatSettings[]) {
+  const [e] = expectedNotes(list[i - 1], 1, tempo, beatCount, beats);
+  const c = list[i];
+  return Math.abs(c.time - e.time) < 1e-6 && c.hz === e.hz && c.peak === e.peak && c.beat === e.beat && c.sub === e.sub;
+}
+
 test("changes while playing apply from the next note", async ({ page }) => {
   await start(page);
   await waitForClicks(page, 6);
 
-  // Subdivision of beat 2 to 3 and tempo to 90, in one task so no note is scheduled between them.
-  const n0 = await page.evaluate(() => {
+  // Subdivision of beat 2 to 3 and tempo to 90, in one task so both apply from the same note.
+  const first = await page.evaluate(() => {
     const n = window.__audio.clicks.length;
     (document.querySelectorAll(".beat")[1].querySelector('input[type=radio][value="3"]') as HTMLInputElement).click();
     const tempo = document.querySelector("#tempo") as HTMLInputElement;
     tempo.value = "90";
     tempo.dispatchEvent(new Event("change", { bubbles: true }));
-    return n;
+    return { n, time: window.__audio.currentTime() };
   });
-  let list = await waitForClicks(page, n0 + 24);
-  // Notes scheduled before the change are on the old grid.
-  const before = list.slice(0, n0);
-  expect(gridIndices(before, NOTE_120_4)).toEqual(before.map((_, i) => i));
-  const lastIndex = n0 - 1;
-  const last: ExpectedNote = {
-    beat: Math.floor(lastIndex / 4) % 4,
-    sub: lastIndex % 4,
-    time: list[lastIndex].time,
-    ...pattern(lastIndex),
-  };
-  const check = (actual: Click[], expected: ExpectedNote[]) =>
-    expected.forEach((e, i) => {
-      expect(actual[i].time, `note ${i} time`).toBeCloseTo(e.time, 6);
-      expect({ hz: actual[i].hz, peak: actual[i].peak }, `note ${i}`).toEqual({ hz: e.hz, peak: e.peak });
-    });
-  const afterChange = expectedNotes(last, 24, 90, 4, beatsOf([4, 3, 4, 4]));
-  check(list.slice(n0, n0 + 24), afterChange);
+  await waitForClicks(page, first.n + 24);
+  await page.waitForFunction((t) => window.__audio.currentTime() > t, first.time + 1);
 
   // Beat count lowered to 3 and the max accent moved to beat 3: its first subdivision is set from accent to
   // max accent, that of beat 1 from max accent to accent (digit keys on the sliders).
-  const n1 = await page.evaluate(() => {
+  const second = await page.evaluate(() => {
     const n = window.__audio.clicks.length;
     const count = document.querySelector("#beat-count") as HTMLInputElement;
     count.value = "3";
@@ -132,15 +128,38 @@ test("changes while playing apply from the next note", async ({ page }) => {
       document.querySelectorAll(".beat")[b].querySelector(".sub")!.dispatchEvent(new KeyboardEvent("keydown", { key: digit, bubbles: true }));
     setFirstSub(0, "2");
     setFirstSub(2, "3");
-    return n;
+    return { n, time: window.__audio.currentTime() };
   });
-  list = await waitForClicks(page, n1 + 20);
-  // Continue the expected sequence under the first change up to the last note scheduled before the second.
-  const upToSecond = expectedNotes(last, n1 - n0, 90, 4, beatsOf([4, 3, 4, 4]));
-  check(list.slice(n0, n1), upToSecond);
-  const afterSecond = expectedNotes(upToSecond[upToSecond.length - 1], 20, 90, 3, beatsOf([4, 3, 4, 4], [false, false, true, false]));
-  check(list.slice(n1, n1 + 20), afterSecond);
+  const list = await waitForClicks(page, second.n + 20);
   await stop(page);
+
+  const initial = [120, 4, beatsOf([4, 4, 4, 4])] as const;
+  const afterFirst = [90, 4, beatsOf([4, 3, 4, 4])] as const;
+  const afterSecond = [90, 3, beatsOf([4, 3, 4, 4], [false, false, true, false])] as const;
+  expect(list[0]).toMatchObject({ beat: 0, sub: 0, ...CLICK_OF.maxAccent });
+
+  // Each change takes effect at one note: the notes before it follow the earlier settings, the notes from
+  // it on the new ones. Notes that both settings give alike may count on either side.
+  let i = 1;
+  while (follows(list, i, ...initial)) i++;
+  const firstChange = i;
+  expect(firstChange, "notes reported before the first change follow the initial settings").toBeGreaterThanOrEqual(first.n);
+  while (i < list.length && follows(list, i, ...afterFirst)) i++;
+  const secondChange = i;
+  expect(secondChange).toBeGreaterThan(firstChange);
+  expect(secondChange).toBeGreaterThanOrEqual(second.n);
+  for (; i < list.length; i++) expect(follows(list, i, ...afterSecond), `note ${i} follows the second change`).toBe(true);
+  expect(list.length - secondChange).toBeGreaterThanOrEqual(20);
+  expect(secondChange - firstChange).toBeGreaterThanOrEqual(6);
+
+  // The changes apply from the next note: those starting CHANGE_DELAY after a change follow it. Notes
+  // starting before the audio clock reached a change were rendered before it.
+  list.forEach((c, k) => {
+    if (k === 0) return;
+    if (c.time >= second.time + CHANGE_DELAY) expect(follows(list, k, ...afterSecond), `note ${k} after the second change`).toBe(true);
+    else if (c.time >= first.time + CHANGE_DELAY && c.time < second.time) expect(follows(list, k, ...afterFirst), `note ${k} after the first change`).toBe(true);
+    else if (c.time < first.time) expect(follows(list, k, ...initial), `note ${k} before the first change`).toBe(true);
+  });
 });
 
 test("each level sets the click pitch and gain; mute is silent; a max accent marks the beat", async ({ page }) => {
