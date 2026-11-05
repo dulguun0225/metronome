@@ -42,7 +42,7 @@ test.describe("installed app (Chromium)", () => {
       scope: baseURL,
       state: "activated",
       controller: `${baseURL}sw.js`,
-      cacheNames: [`metronome:${baseURL}:1`],
+      cacheNames: [`metronome:${baseURL}:2`],
       cached: [
         "/",
         "/apple-touch-icon.png",

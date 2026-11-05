@@ -2,7 +2,7 @@
 // site works under any subpath. The page is fetched network-first, so a new build
 // reaches online users without changing VERSION; change VERSION only when the
 // manifest or icons change.
-const VERSION = "1";
+const VERSION = "2";
 
 // One origin can host several sites (e.g. GitHub Pages project sites), and they share
 // Cache Storage, so cache names include this registration's scope and only caches
