@@ -1,10 +1,12 @@
 import type { Page } from "@playwright/test";
+import { REFRESH_INTERVAL_FRAMES, refreshInterval } from "../../src/refreshInterval";
 import { appState, clearClicks, expect, playButton, slide, start, stop, test, waitForClicks } from "./fixtures";
 
 declare global {
   interface Window {
     __frames: { hold(): void; release(): void };
     __noteRefs: { alive(): number; count(): number };
+    __lastClockRead: number;
   }
 }
 
@@ -42,32 +44,89 @@ function stubLatency(r: ReportedLatency) {
   Object.defineProperty(proto, "outputLatency", { configurable: true, get: () => r.outputLatency });
 }
 
-// Samples the highlighted note on 60 animation frames once the audio clock is past 1 s, and returns how
-// far each highlighted note's onset is behind currentTime - `delay`, in seconds.
-async function highlightLags(page: Page, delay: number): Promise<number[]> {
-  await page.waitForFunction(() => window.__audio.currentTime() > 1);
-  return page.evaluate(async (delay) => {
-    const lags: number[] = [];
-    for (let i = 0; i < 60; i++) {
-      await new Promise(requestAnimationFrame);
-      const now = window.__audio.currentTime();
-      const beats = [...document.querySelectorAll(".beat")];
-      const beat = beats.findIndex((b) => b.classList.contains("active"));
-      const sub = beat < 0 ? -1 : [...beats[beat].querySelectorAll(".sub")].findIndex((s) => s.classList.contains("active"));
-      // The latest reported note at that position.
-      const note = window.__audio.notes.filter((n) => n.beat === beat && n.sub === sub && n.time <= now).pop();
-      lags.push(note ? now - delay - note.time : NaN);
-    }
-    return lags;
-  }, delay);
+// Init script: keeps the currentTime last read from an AudioContext. Animation frame callbacks run in the
+// order requested, and the app requests each frame before a test's callback does, so a test's callback
+// reads here the audio clock time the app used in that frame. Runs in the page, so it must not use outer
+// variables.
+function recordClockReads() {
+  const currentTime = Object.getOwnPropertyDescriptor(BaseAudioContext.prototype, "currentTime")!;
+  Object.defineProperty(BaseAudioContext.prototype, "currentTime", {
+    ...currentTime,
+    get(this: BaseAudioContext) {
+      const time = currentTime.get!.call(this) as number;
+      window.__lastClockRead = time;
+      return time;
+    },
+  });
 }
 
-// The highlighted note is the latest one whose onset the heard time has reached: its onset is at most a
-// note interval behind it, with one animation frame of tolerance either side.
-function expectHighlightFollows(lags: number[]) {
-  expect(lags.every((l) => !Number.isNaN(l)), "a note is highlighted").toBe(true);
-  expect(Math.min(...lags), "not shown before it is heard").toBeGreaterThan(-0.02);
-  expect(Math.max(...lags), "the latest note heard").toBeLessThan(NOTE + 0.02);
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(recordClockReads);
+});
+
+interface FrameSample {
+  // Time requestAnimationFrame passed to the frame, in ms.
+  frameTime: number;
+  // How far the highlighted note's onset is before the heard time, in seconds; NaN when none is highlighted.
+  lag: number;
+  // How far the next reported note's onset is after the heard time, in seconds; null when it is not reported yet.
+  nextLead: number | null;
+}
+
+// Samples the highlight on consecutive animation frames once the audio clock is past 1 s: 60 frames and,
+// before them, enough to estimate the refresh interval as the app does. The heard time of a frame is the
+// audio clock time the app read in it, less `delay`.
+async function sampleFrames(page: Page, delay: number): Promise<FrameSample[]> {
+  await page.waitForFunction(() => window.__audio.currentTime() > 1);
+  return page.evaluate(
+    async ({ delay, count, note }) => {
+      const samples: FrameSample[] = [];
+      for (let i = 0; i < count; i++) {
+        const frameTime = await new Promise<number>(requestAnimationFrame);
+        const heard = window.__lastClockRead - delay;
+        const beats = [...document.querySelectorAll(".beat")];
+        const beat = beats.findIndex((b) => b.classList.contains("active"));
+        const sub = beat < 0 ? -1 : [...beats[beat].querySelectorAll(".sub")].findIndex((s) => s.classList.contains("active"));
+        // The latest reported note at that position that may be shown: its onset is less than a note
+        // interval after the heard time.
+        const notes = window.__audio.notes;
+        const index = notes.findLastIndex((n) => n.beat === beat && n.sub === sub && n.time <= heard + note);
+        const next = index < 0 ? undefined : notes[index + 1];
+        samples.push({
+          frameTime,
+          lag: index < 0 ? NaN : heard - notes[index].time,
+          nextLead: next ? next.time - heard : null,
+        });
+      }
+      return samples;
+    },
+    { delay, count: REFRESH_INTERVAL_FRAMES + 60, note: NOTE },
+  );
+}
+
+// Allowance for rounding, and for the audio clock moving between the app's reads in one frame.
+const TOLERANCE = 0.001;
+
+// Each frame shows the latest note whose onset is heard within half a refresh interval, the interval
+// estimated from the latest frame times as the app does. So the highlighted note is shown at most half
+// a refresh interval before it is heard, and the next note is shown on the first frame at which it is
+// heard within half a refresh interval: the frame nearest to the time it is heard.
+function expectHighlightFollows(samples: FrameSample[]) {
+  const times = samples.map((s) => s.frameTime);
+  const checked = samples.slice(REFRESH_INTERVAL_FRAMES).map((s, i) => ({
+    ...s,
+    half: refreshInterval(times.slice(i, i + REFRESH_INTERVAL_FRAMES + 1)) / 2000,
+  }));
+  expect(checked.every((s) => !Number.isNaN(s.lag)), "a note is highlighted").toBe(true);
+  expect(checked.every((s) => s.half > 0), "the refresh interval is estimated").toBe(true);
+  expect(
+    checked.filter((s) => s.lag < -s.half - TOLERANCE),
+    "shown at most half a refresh interval before it is heard",
+  ).toEqual([]);
+  expect(
+    checked.filter((s) => s.nextLead !== null && s.nextLead <= s.half - TOLERANCE),
+    "the next note is not heard within half a refresh interval",
+  ).toEqual([]);
 }
 
 const delayRadio = (page: Page, mode: "automatic" | "manual") => page.locator(`input[name=output-delay-mode][value=${mode}]`);
@@ -81,7 +140,7 @@ test("Automatic delays the highlight by the output timestamp the browser reports
   await expect(delayRadio(page, "automatic")).toBeChecked();
   await start(page);
   await expect(reported(page)).toHaveText("browser reports 400 ms");
-  expectHighlightFollows(await highlightLags(page, 0.4));
+  expectHighlightFollows(await sampleFrames(page, 0.4));
   await stop(page);
 });
 
@@ -90,7 +149,7 @@ test("Automatic keeps the latency of a Firefox output timestamp", async ({ page 
   await page.goto("/");
   await start(page);
   await expect(reported(page)).toHaveText("browser reports 350 ms");
-  expectHighlightFollows(await highlightLags(page, 0.35));
+  expectHighlightFollows(await sampleFrames(page, 0.35));
   await stop(page);
 });
 
@@ -100,7 +159,7 @@ test("Automatic does not use an output timestamp later than now, as WebKit repor
   await start(page);
   // The base and output latency instead. The timestamp's error grows with the context time, so both are
   // checked after the first second.
-  expectHighlightFollows(await highlightLags(page, 0.2));
+  expectHighlightFollows(await sampleFrames(page, 0.2));
   await expect(reported(page)).toHaveText("browser reports 200 ms");
   await stop(page);
 });
@@ -110,7 +169,7 @@ test("without an output timestamp, Automatic uses the base and output latency", 
   await page.goto("/");
   await start(page);
   await expect(reported(page)).toHaveText("browser reports 300 ms");
-  expectHighlightFollows(await highlightLags(page, 0.3));
+  expectHighlightFollows(await sampleFrames(page, 0.3));
   await stop(page);
 });
 
@@ -121,7 +180,7 @@ test("with nothing reported, Automatic shows the note at the audio clock", async
   await waitForClicks(page, 8);
   await page.waitForTimeout(600);
   await expect(reported(page)).toHaveText("not reported");
-  expectHighlightFollows(await highlightLags(page, 0));
+  expectHighlightFollows(await sampleFrames(page, 0));
   await stop(page);
 });
 
@@ -139,18 +198,18 @@ test("Manual delays the highlight by the slider value, not the reported delay", 
   await slide(delaySlider(page), 150);
   await expect(page.locator(".delay-value")).toHaveText("150 ms");
   await expect(delaySlider(page)).toHaveAttribute("aria-valuetext", "150 ms");
-  expectHighlightFollows(await highlightLags(page, 0.15));
+  expectHighlightFollows(await sampleFrames(page, 0.15));
 
   // Back to Automatic, then Manual again: the manual value is kept.
   await delayRadio(page, "automatic").check();
   await expect(delaySlider(page)).toHaveCount(0);
   // A longer delay holds the highlight on the last note shown until the heard time reaches the next one.
   await page.waitForTimeout(400);
-  expectHighlightFollows(await highlightLags(page, 0.4));
+  expectHighlightFollows(await sampleFrames(page, 0.4));
   await delayRadio(page, "manual").check();
   await expect(delaySlider(page)).toHaveValue("150");
   await slide(delaySlider(page), 0);
-  expectHighlightFollows(await highlightLags(page, 0));
+  expectHighlightFollows(await sampleFrames(page, 0));
   await stop(page);
 });
 
@@ -274,7 +333,7 @@ test.describe("hidden page (Chromium)", () => {
     await page.evaluate(() => window.__frames.release());
     // Past the notes reported before the records were cleared.
     await waitForClicks(page, 8);
-    expectHighlightFollows(await highlightLags(page, 0.4));
+    expectHighlightFollows(await sampleFrames(page, 0.4));
     await stop(page);
   });
 });

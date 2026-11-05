@@ -1,5 +1,6 @@
 import { PROCESSOR_NAME, type Level, type NoteReport, type Position, type ProcessorMessage, type ProcessorOptions, type Settings } from "./clickGenerator";
 import workletCode from "./clickWorklet.ts?worklet";
+import { REFRESH_INTERVAL_FRAMES, refreshInterval } from "./refreshInterval";
 
 export { nextPosition, type BeatSettings, type Level, type Position, type Settings } from "./clickGenerator";
 
@@ -87,7 +88,7 @@ interface Run {
 }
 
 // Plays the clicks from an AudioWorklet (clickWorklet.ts), which reports every note it starts; an
-// animation frame loop shows the latest note whose onset has reached the output device.
+// animation frame loop shows each note on the frame nearest to the time its onset is heard.
 export class Metronome {
   #settings: Settings;
   #onActive: (pos: Position | null) => void;
@@ -99,6 +100,11 @@ export class Metronome {
   // Manual output delay in seconds, or null to use the delay the browser reports.
   #outputDelay: number | null = null;
   #frame: number | undefined;
+  // Times requestAnimationFrame passed to the latest #draw calls, oldest first, to estimate the display
+  // refresh interval. Kept across runs, so a restart has an estimate at once; the difference across a stop
+  // and start is long like that of skipped frames, or short like that of a frame run early, and the
+  // estimate allows for both.
+  #frameTimes: number[] = [];
   // Reported notes not yet shown, in time order. Notes also arrive while no animation frame runs (a hidden
   // page), so of the notes the heard time has reached, only the latest is kept.
   #queue: NoteReport[] = [];
@@ -199,28 +205,34 @@ export class Metronome {
     const node = new AudioWorkletNode(ctx, PROCESSOR_NAME, { numberOfInputs: 0, outputChannelCount: [1], processorOptions });
     node.port.onmessage = (e: MessageEvent<NoteReport[]>) => {
       this.#queue.push(...e.data);
-      const reached = this.#reachedCount(ctx);
+      // Without lookahead, the latest note kept is never later than the note the next frame shows, as that
+      // frame looks ahead by 0 or more from the same or a later heard time.
+      const reached = this.#reachedCount(ctx, 0);
       if (reached > 1) this.#queue.splice(0, reached - 1);
     };
     node.connect(run.output);
     run.node = node;
   }
 
-  // Number of queued notes whose onsets the audio heard now has reached: the audio at currentTime less the
-  // manual output delay, or at the time the browser reports.
-  #reachedCount(ctx: AudioContext): number {
+  // Number of queued notes whose onsets are heard within `lookahead` seconds from now. The audio heard now
+  // is the audio at currentTime less the manual output delay, or at the time the browser reports.
+  #reachedCount(ctx: AudioContext, lookahead: number): number {
     const heard = this.#outputDelay !== null ? ctx.currentTime - this.#outputDelay : (reportedHeardTime(ctx) ?? ctx.currentTime);
     let count = 0;
-    while (count < this.#queue.length && this.#queue[count].time <= heard) count++;
+    while (count < this.#queue.length && this.#queue[count].time <= heard + lookahead) count++;
     return count;
   }
 
   // Arrow function so it can be passed to requestAnimationFrame directly.
-  #draw = () => {
+  #draw = (time: number) => {
     const ctx = this.#ctx;
     if (!ctx) return;
-    // The latest note that has reached the output device is the one sounding; older ones are dropped.
-    const reached = this.#reachedCount(ctx);
+    this.#frameTimes.push(time);
+    if (this.#frameTimes.length > REFRESH_INTERVAL_FRAMES + 1) this.#frameTimes.shift();
+    // The latest note heard within half a refresh interval is shown, so each note appears on the frame
+    // nearest to the time its onset is heard, not on the first frame after it (half an interval late on
+    // average). Until the interval is estimated, there is no lookahead. Older notes are dropped.
+    const reached = this.#reachedCount(ctx, refreshInterval(this.#frameTimes) / 2000);
     if (reached > 0) {
       const current = this.#queue[reached - 1];
       this.#queue.splice(0, reached);
