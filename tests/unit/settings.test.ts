@@ -12,9 +12,11 @@ import {
   storageKey,
   type SavedSettings,
 } from "../../src/settings";
+import type { Level } from "../../src/metronome";
 
 const KEY = "metronome:/:settings";
-const allOn = () => Array(8).fill(true);
+// Levels of the first subdivision then of the other seven.
+const levels = (first: Level, rest: Level = "normal"): Level[] => [first, ...Array<Level>(7).fill(rest)];
 
 class MemoryStorage {
   items = new Map<string, string>();
@@ -43,9 +45,9 @@ function stored(fields: Record<string, unknown> = {}) {
     beatCount: 3,
     volume: 0.5,
     beats: [
-      { subDivision: 3, enabled: [true, false, true, true, true, true, true, true], accent: false },
-      { subDivision: 2, enabled: allOn(), accent: true },
-      { subDivision: 1, enabled: allOn(), accent: false },
+      { subDivision: 3, levels: ["accent", "mute", "normal", "maxAccent", "normal", "normal", "normal", "normal"] },
+      { subDivision: 2, levels: levels("maxAccent") },
+      { subDivision: 1, levels: levels("mute", "accent") },
     ],
     ...fields,
   };
@@ -57,8 +59,17 @@ describe("defaults", () => {
       tempo: 120,
       beatCount: 4,
       volume: 0.8,
-      beats: [0, 1, 2, 3].map((i) => ({ subDivision: 4, enabled: allOn(), accent: i === 0 })),
+      beats: [
+        { subDivision: 4, levels: levels("maxAccent") },
+        { subDivision: 4, levels: levels("accent") },
+        { subDivision: 4, levels: levels("accent") },
+        { subDivision: 4, levels: levels("accent") },
+      ],
     });
+  });
+
+  test("default settings for a beat beyond the default count", () => {
+    expect(defaultBeatSettings(6)).toEqual({ subDivision: 4, levels: levels("accent") });
   });
 });
 
@@ -90,7 +101,7 @@ describe("parseSettings", () => {
     expect(parseSettings(data)).toEqual(defaultSettings());
   });
 
-  test.each([undefined, 0, 2, "1"])("version %j gives defaults", (version) => {
+  test.each([undefined, 0, 1, 3, "2"])("version %j gives defaults", (version) => {
     expect(parseSettings(stored({ version }))).toEqual(defaultSettings());
   });
 
@@ -130,10 +141,10 @@ describe("parseSettings", () => {
   });
 
   test("missing beat entries up to the count get defaults", () => {
-    const s = parseSettings(stored({ beatCount: 4, beats: [{ subDivision: 2, enabled: allOn(), accent: false }] }));
+    const s = parseSettings(stored({ beatCount: 4, beats: [{ subDivision: 2, levels: levels("accent") }] }));
     expect(s.beatCount).toBe(4);
     expect(s.beats).toEqual([
-      { subDivision: 2, enabled: allOn(), accent: false },
+      { subDivision: 2, levels: levels("accent") },
       defaultBeatSettings(1),
       defaultBeatSettings(2),
       defaultBeatSettings(3),
@@ -165,45 +176,55 @@ describe("parseSettings", () => {
     [8, 8],
     [1, 1],
   ])("subdivision %j is clamped to %j", (subDivision, expected) => {
-    const s = parseSettings(stored({ beats: [{ subDivision, enabled: allOn(), accent: true }] }));
+    const s = parseSettings(stored({ beats: [{ subDivision, levels: levels("maxAccent") }] }));
     expect(s.beats[0].subDivision).toBe(expected);
   });
 
   test.each([undefined, "3", null, NaN])("subdivision %j falls back to the default", (subDivision) => {
-    const s = parseSettings(stored({ beats: [{ subDivision, enabled: allOn(), accent: true }] }));
+    const s = parseSettings(stored({ beats: [{ subDivision, levels: levels("maxAccent") }] }));
     expect(s.beats[0].subDivision).toBe(4);
   });
 
   test.each([
-    ["too short", [true, false, true]],
-    ["too long", Array(9).fill(false)],
-    ["not booleans", [1, 0, 1, 1, 1, 1, 1, 1]],
-    ["one null", [true, true, null, true, true, true, true, true]],
-    ["not an array", "true"],
+    ["too short", ["mute", "normal", "accent"]],
+    ["too long", Array(9).fill("normal")],
+    ["an unknown name", ["normal", "normal", "loud", "normal", "normal", "normal", "normal", "normal"]],
+    ["one null", ["normal", "normal", null, "normal", "normal", "normal", "normal", "normal"]],
+    ["version 1 flags", Array(8).fill(true)],
+    ["indices", [0, 1, 2, 3, 0, 1, 2, 3]],
+    ["not an array", "normal"],
     ["missing", undefined],
-  ])("enabled flags %s fall back to all on", (_, enabled) => {
-    const s = parseSettings(stored({ beats: [{ subDivision: 2, enabled, accent: true }] }));
-    expect(s.beats[0]).toEqual({ subDivision: 2, enabled: allOn(), accent: true });
+  ])("levels %s fall back to the defaults for the beat's index", (_, invalid) => {
+    const s = parseSettings(stored({ beats: [{ subDivision: 2, levels: invalid }, { subDivision: 3, levels: invalid }] }));
+    expect(s.beats.slice(0, 2)).toEqual([
+      { subDivision: 2, levels: levels("maxAccent") },
+      { subDivision: 3, levels: levels("accent") },
+    ]);
   });
 
-  test("valid enabled flags are copied", () => {
-    const enabled = [false, true, false, true, false, true, false, true];
-    const s = parseSettings(stored({ beats: [{ subDivision: 8, enabled, accent: false }] }));
-    expect(s.beats[0].enabled).toEqual(enabled);
-    expect(s.beats[0].enabled).not.toBe(enabled);
+  test("valid levels are copied", () => {
+    const valid: Level[] = ["mute", "normal", "accent", "maxAccent", "maxAccent", "accent", "normal", "mute"];
+    const s = parseSettings(stored({ beats: [{ subDivision: 8, levels: valid }] }));
+    expect(s.beats[0].levels).toEqual(valid);
+    expect(s.beats[0].levels).not.toBe(valid);
   });
 
-  test("an accent that is not a boolean falls back to the default for its index", () => {
-    const s = parseSettings(
-      stored({
-        beats: [
-          { subDivision: 4, enabled: allOn(), accent: "yes" },
-          { subDivision: 4, enabled: allOn(), accent: 1 },
-        ],
-        beatCount: 2,
-      }),
-    );
-    expect(s.beats.map((b) => b.accent)).toEqual([true, false]);
+  test("version 1 data, with on/off flags and accents, gives defaults", () => {
+    const data = {
+      version: 1,
+      tempo: 90,
+      beatCount: 3,
+      volume: 0.5,
+      beats: [
+        { subDivision: 3, enabled: [true, false, true, true, true, true, true, true], accent: false },
+        { subDivision: 2, enabled: Array(8).fill(true), accent: true },
+        { subDivision: 1, enabled: Array(8).fill(false), accent: false },
+      ],
+    };
+    expect(parseSettings(data)).toEqual(defaultSettings());
+    const storage = new MemoryStorage();
+    storage.setItem(KEY, JSON.stringify(data));
+    expect(loadSettings(storage, KEY)).toEqual(defaultSettings());
   });
 
   test.each([
@@ -234,9 +255,9 @@ describe("loadSettings and saveSettings", () => {
     beatCount: 2,
     volume: 0.35,
     beats: [
-      { subDivision: 3, enabled: [true, false, true, true, true, true, true, true], accent: false },
-      { subDivision: 8, enabled: allOn(), accent: true },
-      { subDivision: 6, enabled: [true, true, true, false, true, true, true, true], accent: false },
+      { subDivision: 3, levels: ["accent", "mute", "normal", "normal", "normal", "normal", "normal", "normal"] },
+      { subDivision: 8, levels: ["maxAccent", "normal", "accent", "maxAccent", "normal", "mute", "normal", "normal"] },
+      { subDivision: 6, levels: ["mute", "normal", "normal", "mute", "normal", "normal", "normal", "normal"] },
     ],
   };
 

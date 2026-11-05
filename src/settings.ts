@@ -1,15 +1,16 @@
-import type { BeatSettings } from "./metronome";
+import { LEVELS, type BeatSettings, type Level } from "./metronome";
 
 export const MIN_TEMPO = 20;
 export const MAX_TEMPO = 300;
 export const MAX_SUBDIVISION = 8;
 export const DEFAULT_TEMPO = 120;
 export const DEFAULT_BEAT_COUNT = 4;
-// Master volume 0.8 with an accented click level of 1.0 gives the accented click its former peak gain.
+// Master volume 0.8 with a max accent click gain of 1.0 gives the loudest click its former peak gain.
 export const DEFAULT_VOLUME = 0.8;
 
-// Version of the stored format; stored data with any other version is ignored.
-export const SCHEMA_VERSION = 1;
+// Version of the stored format; stored data with any other version, including version 1
+// (per-subdivision on/off flags and a per-beat accent), is ignored.
+export const SCHEMA_VERSION = 2;
 
 export interface SavedSettings {
   tempo: number;
@@ -21,9 +22,10 @@ export interface SavedSettings {
 }
 
 export function defaultBeatSettings(index: number): BeatSettings {
-  // One flag per possible subdivision, sized to the largest choice so flags are kept when the subdivision changes.
-  // Only the first beat is accented.
-  return { subDivision: 4, enabled: Array.from({ length: MAX_SUBDIVISION }, () => true), accent: index === 0 };
+  // One level per possible subdivision, sized to the largest choice so levels are kept when the subdivision changes.
+  // The first subdivision of every beat is accented, that of the first beat the most.
+  const first: Level = index === 0 ? "maxAccent" : "accent";
+  return { subDivision: 4, levels: Array.from({ length: MAX_SUBDIVISION }, (_, i) => (i === 0 ? first : "normal")) };
 }
 
 // Default settings for beats `from` to `to - 1`.
@@ -59,6 +61,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isLevel(value: unknown): value is Level {
+  return (LEVELS as readonly unknown[]).includes(value);
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -72,11 +78,8 @@ function parseBeat(value: unknown, index: number): BeatSettings {
   const beat = defaultBeatSettings(index);
   if (!isRecord(value)) return beat;
   beat.subDivision = readInteger(value.subDivision, 1, MAX_SUBDIVISION) ?? beat.subDivision;
-  const enabled = value.enabled;
-  if (Array.isArray(enabled) && enabled.length === MAX_SUBDIVISION && enabled.every((on) => typeof on === "boolean")) {
-    beat.enabled = [...enabled];
-  }
-  if (typeof value.accent === "boolean") beat.accent = value.accent;
+  const levels = value.levels;
+  if (Array.isArray(levels) && levels.length === MAX_SUBDIVISION && levels.every(isLevel)) beat.levels = [...levels];
   return beat;
 }
 
@@ -119,7 +122,7 @@ export function saveSettings(storage: Pick<Storage, "setItem"> | null, key: stri
     tempo: settings.tempo,
     beatCount: settings.beatCount,
     volume: settings.volume,
-    beats: settings.beats.map((b) => ({ subDivision: b.subDivision, enabled: [...b.enabled], accent: b.accent })),
+    beats: settings.beats.map((b) => ({ subDivision: b.subDivision, levels: [...b.levels] })),
   };
   try {
     storage?.setItem(key, JSON.stringify(data));

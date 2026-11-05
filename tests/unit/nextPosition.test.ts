@@ -1,10 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { nextPosition, type BeatSettings, type Position } from "../../src/metronome";
+import { nextPosition, type BeatSettings, type Level, type Position } from "../../src/metronome";
 
-const beat = (subDivision: number, enabled: boolean[] = Array(8).fill(true)): BeatSettings => ({
+const beat = (subDivision: number, levels: Level[] = Array<Level>(8).fill("normal")): BeatSettings => ({
   subDivision,
-  enabled,
-  accent: false,
+  levels,
 });
 
 describe("nextPosition", () => {
@@ -52,8 +51,8 @@ describe("nextPosition", () => {
     expect(nextPosition({ beat: 0, sub: 3 }, 2, [beat(8), beat(4)])).toEqual({ beat: 0, sub: 4 });
   });
 
-  test("an unchecked subdivision is still a position", () => {
-    const enabled = [true, false, true, true, true, true, true, true];
-    expect(nextPosition({ beat: 0, sub: 0 }, 1, [beat(2, enabled)])).toEqual({ beat: 0, sub: 1 });
+  test("a muted subdivision is still a position", () => {
+    const levels: Level[] = ["normal", "mute", "normal", "normal", "normal", "normal", "normal", "normal"];
+    expect(nextPosition({ beat: 0, sub: 0 }, 1, [beat(2, levels)])).toEqual({ beat: 0, sub: 1 });
   });
 });

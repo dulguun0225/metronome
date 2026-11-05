@@ -627,51 +627,6 @@ h2 {
   color: var(--active-strong);
 }
 
-.accent-toggle {
-  position: relative;
-  display: block;
-}
-
-.accent-toggle input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-/* Accent on/off: native checkbox shown as a chip; on = filled, off = outlined. */
-.accent-toggle span {
-  display: block;
-  padding: 0.25rem 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text-muted);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  user-select: none;
-}
-
-.accent-toggle input:hover + span {
-  border-color: var(--text-muted);
-  color: var(--text);
-}
-
-.accent-toggle input:checked + span {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--surface);
-}
-
-.accent-toggle input:focus-visible + span {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
-}
-
 /* Subdivision choice: native radios shown as a segmented control. */
 
 .segmented {
@@ -705,8 +660,7 @@ h2 {
   min-width: 0;
 }
 
-.segment input,
-.sub input {
+.segment input {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -743,7 +697,8 @@ h2 {
   outline-offset: 1px;
 }
 
-/* Subdivision on/off: native checkboxes shown as pills; on = filled, off = hollow. */
+/* Subdivision levels: buttons shown as outlined bars filled from the bottom, more for a higher level;
+   mute = hollow and dashed. */
 
 .subs {
   display: flex;
@@ -751,54 +706,67 @@ h2 {
 }
 
 .sub {
+  --mark: var(--note-on);
+  --fill: 0%;
   position: relative;
   display: flex;
   align-items: center;
   flex: 1 1 0;
   min-width: 0;
   height: 2.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  /* Quick repeated taps must not zoom the page. */
+  touch-action: manipulation;
+}
+
+.sub[data-level="normal"] {
+  --fill: 34%;
+}
+
+.sub[data-level="accent"] {
+  --fill: 67%;
+}
+
+.sub[data-level="maxAccent"] {
+  --fill: 100%;
 }
 
 .sub-mark {
   display: block;
   width: 100%;
-  height: 70%;
-  border: 2px solid var(--note-on);
-  border-radius: 999px;
-  background: var(--note-on);
+  height: 100%;
+  border: 2px solid var(--mark);
+  border-radius: var(--radius-small);
+  background: linear-gradient(to top, var(--mark) var(--fill), transparent var(--fill));
   /* No transition: notes can be as little as 25 ms apart, and a fading previous note would look active too. */
 }
 
-/* The first note of a beat is the beat itself; later ones are subdivisions. */
-.sub:first-child .sub-mark {
-  height: 100%;
-}
-
-.sub.off .sub-mark {
+.sub[data-level="mute"] .sub-mark {
   border-style: dashed;
   border-color: var(--note-off);
   background: transparent;
 }
 
-.sub input:hover + .sub-mark {
+.sub:hover .sub-mark {
   filter: brightness(1.1);
 }
 
-.sub input:focus-visible + .sub-mark {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+.sub.active {
+  --mark: var(--active);
 }
 
 .sub.active .sub-mark {
-  border-color: var(--active);
-  background: var(--active);
   box-shadow: 0 0 0 3px var(--active-glow);
   transform: scaleY(1.12);
 }
 
-/* An unchecked note is silent but its position is still shown. */
-.sub.active.off .sub-mark {
+/* A muted note is silent but its position is still shown. */
+.sub.active[data-level="mute"] .sub-mark {
   border-style: solid;
+  border-color: var(--active);
   background: var(--active-tint);
 }
 

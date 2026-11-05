@@ -1,21 +1,22 @@
 import {
   ACCENT_HZ,
-  accentCheckbox,
-  BEAT_HZ,
   beatsOf,
+  CLICK_OF,
   clearClicks,
   clicks,
   expect,
   expectedNotes,
   gridIndices,
+  MAX_ACCENT_HZ,
+  NORMAL_HZ,
   NOTE_120_4,
   outputGain,
   playButton,
   slide,
   start,
   stop,
-  SUB_HZ,
   setSub,
+  subButton,
   test,
   volumeSlider,
   waitForClicks,
@@ -23,12 +24,13 @@ import {
   type ExpectedNote,
 } from "./fixtures";
 
-// Pitch and relative level of note `i` of a 4/4 bar with 4 subdivisions per beat, given the accented beats.
-function pattern(i: number, accented = [true, false, false, false]) {
+// Pitch and peak gain of note `i` of a 4/4 bar with 4 subdivisions per beat and default levels, given the beats
+// whose first subdivision is at max accent (the others are at accent).
+function pattern(i: number, maxAccented = [true, false, false, false]) {
   const sub = i % 4;
   const beatIndex = Math.floor(i / 4) % 4;
-  if (sub > 0) return { hz: SUB_HZ, peak: 0.5 };
-  return accented[beatIndex] ? { hz: ACCENT_HZ, peak: 1 } : { hz: BEAT_HZ, peak: 0.7 };
+  if (sub > 0) return CLICK_OF.normal;
+  return maxAccented[beatIndex] ? CLICK_OF.maxAccent : CLICK_OF.accent;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -68,8 +70,8 @@ test("plays 120 BPM 4/4 with four subdivisions at the right times, pitches and l
   await stop(page);
 });
 
-test("an unchecked note is silent but still highlighted", async ({ page }) => {
-  await setSub(page, 0, 1, false);
+test("a muted note is silent but still highlighted", async ({ page }) => {
+  await setSub(page, 0, 1, "mute");
   await start(page);
   // Two bars: 32 positions, two of them silent.
   const list = (await waitForClicks(page, 30)).slice(0, 30);
@@ -79,7 +81,7 @@ test("an unchecked note is silent but still highlighted", async ({ page }) => {
   await page.waitForFunction(
     () => {
       const sub = document.querySelectorAll(".beat")[0].querySelectorAll(".sub")[1];
-      return sub.classList.contains("active") && sub.classList.contains("off");
+      return sub.classList.contains("active") && (sub as HTMLElement).dataset.level === "mute";
     },
     null,
     { polling: "raf", timeout: 5000 },
@@ -119,14 +121,16 @@ test("changes while playing apply from the next note", async ({ page }) => {
   const afterChange = expectedNotes(last, 24, 90, 4, beatsOf([4, 3, 4, 4]));
   check(list.slice(n0, n0 + 24), afterChange);
 
-  // Beat count lowered to 3 and the accent moved to beat 3.
+  // Beat count lowered to 3 and the max accent moved to beat 3: its first subdivision steps from accent to
+  // max accent, that of beat 1 from max accent through mute and normal to accent.
   const n1 = await page.evaluate(() => {
     const n = window.__audio.clicks.length;
     const count = document.querySelector("#beat-count") as HTMLInputElement;
     count.value = "3";
     count.dispatchEvent(new Event("change", { bubbles: true }));
-    (document.querySelectorAll(".beat")[0].querySelector(".accent-toggle input") as HTMLInputElement).click();
-    (document.querySelectorAll(".beat")[2].querySelector(".accent-toggle input") as HTMLInputElement).click();
+    const firstSub = (b: number) => document.querySelectorAll(".beat")[b].querySelector(".sub") as HTMLButtonElement;
+    for (let i = 0; i < 3; i++) firstSub(0).click();
+    firstSub(2).click();
     return n;
   });
   list = await waitForClicks(page, n1 + 20);
@@ -138,7 +142,7 @@ test("changes while playing apply from the next note", async ({ page }) => {
   await stop(page);
 });
 
-test("accent toggles set the beat start pitch; an unchecked accented note is silent", async ({ page }) => {
+test("each level sets the click pitch and gain; mute is silent; a max accent marks the beat", async ({ page }) => {
   const play = async (count: number) => {
     await clearClicks(page);
     await start(page);
@@ -148,20 +152,36 @@ test("accent toggles set the beat start pitch; an unchecked accented note is sil
   };
 
   let list = await play(16);
-  expect(list.map((c) => c.hz)).toEqual(list.map((_, i) => pattern(i).hz));
+  list.forEach((c, i) => expect({ hz: c.hz, peak: c.peak }, `note ${i}`).toEqual(pattern(i)));
+  await expect(page.locator(".beat.accent")).toHaveCount(1);
+  await expect(page.locator(".beat").nth(0)).toHaveClass(/accent/);
+  await expect(page.locator(".bar-dot.accent")).toHaveCount(1);
+  await expect(page.locator(".bar-dot").nth(0)).toHaveClass(/accent/);
 
-  await accentCheckbox(page, 2).check();
-  await accentCheckbox(page, 0).uncheck();
+  // Beat 2 gets all four levels; the max accent moves from beat 1 to beat 3.
+  await setSub(page, 1, 0, "mute");
+  await setSub(page, 1, 1, "normal");
+  await setSub(page, 1, 2, "accent");
+  await setSub(page, 1, 3, "maxAccent");
+  await setSub(page, 0, 0, "accent");
+  await setSub(page, 2, 0, "maxAccent");
   await expect(page.locator(".beat.accent")).toHaveCount(1);
   await expect(page.locator(".beat").nth(2)).toHaveClass(/accent/);
-  list = await play(16);
-  const accented = [false, false, true, false];
-  list.forEach((c, i) => expect({ hz: c.hz, peak: c.peak }, `note ${i}`).toEqual(pattern(i, accented)));
+  await expect(page.locator(".bar-dot.accent")).toHaveCount(1);
+  await expect(page.locator(".bar-dot").nth(2)).toHaveClass(/accent/);
 
-  await setSub(page, 2, 0, false);
   list = await play(15);
-  expect(list.filter((c) => c.hz === ACCENT_HZ)).toEqual([]);
-  expect(gridIndices(list, NOTE_120_4)).toEqual(Array.from({ length: 16 }, (_, i) => i).filter((i) => i !== 8));
+  // Bar positions: beat 2 starts at 4, muted.
+  const positions = Array.from({ length: 16 }, (_, i) => i).filter((i) => i !== 4);
+  expect(gridIndices(list, NOTE_120_4)).toEqual(positions);
+  const expected = (i: number) => {
+    if (i === 5) return CLICK_OF.normal;
+    if (i === 6) return CLICK_OF.accent;
+    if (i === 7) return CLICK_OF.maxAccent;
+    return pattern(i, [false, false, true, false]);
+  };
+  list.forEach((c, k) => expect({ hz: c.hz, peak: c.peak }, `position ${positions[k]}`).toEqual(expected(positions[k])));
+  expect(await subButton(page, 1, 0).getAttribute("data-level")).toBe("mute");
 });
 
 test("the volume slider sets the master volume live; click levels stay relative", async ({ page }) => {
@@ -182,7 +202,7 @@ test("the volume slider sets the master volume live; click levels stay relative"
   await clearClicks(page);
   const list = await waitForClicks(page, 16);
   const levels = new Map(list.map((c) => [c.hz, c.peak]));
-  expect(Object.fromEntries(levels)).toEqual({ [ACCENT_HZ]: 1, [BEAT_HZ]: 0.7, [SUB_HZ]: 0.5 });
+  expect(Object.fromEntries(levels)).toEqual({ [MAX_ACCENT_HZ]: 1, [ACCENT_HZ]: 0.7, [NORMAL_HZ]: 0.5 });
 
   await slide(volumeSlider(page), 0);
   expect(await outputGain(page)).toBe(0);

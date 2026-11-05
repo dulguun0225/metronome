@@ -44,6 +44,11 @@ function isInputOfType(el: Element | null, ...types: string[]) {
   return el instanceof HTMLInputElement && types.includes(el.type);
 }
 
+// A subdivision button of a Beat; Space on it steps its level.
+function isSubButton(el: Element | null) {
+  return el instanceof HTMLButtonElement && el.classList.contains("sub");
+}
+
 // Reads an integer from a number input, clamps it to [min, max] and stores it.
 // An empty or invalid entry keeps the previous value.
 function commitInteger(
@@ -90,7 +95,7 @@ export default function App() {
         tempo: tempo(),
         beatCount: beatCount(),
         volume: volume(),
-        beats: beats.map((b) => ({ subDivision: b.subDivision, enabled: [...b.enabled], accent: b.accent })),
+        beats: beats.map((b) => ({ subDivision: b.subDivision, levels: [...b.levels] })),
       }),
       (settings) => saveSettings(storage, settingsKey, settings),
       { defer: true },
@@ -152,13 +157,13 @@ export default function App() {
 
   // Space toggles playback; ArrowUp/ArrowDown change the tempo; T taps the tempo.
   // Keys are left to the focused element where it uses them itself: typing in a field,
-  // Space on a checkbox or radio, arrows on a radio group or the slider.
+  // Space on a checkbox, radio or subdivision button, arrows on a radio group or the slider.
   function onKeyDown(e: KeyboardEvent) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const target = document.activeElement;
     if (isTextField(target)) return;
     if (e.key === " ") {
-      if (isInputOfType(target, "checkbox", "radio")) return;
+      if (isInputOfType(target, "checkbox", "radio") || isSubButton(target)) return;
       // Also stops a focused button from being clicked by the same key press.
       e.preventDefault();
       if (!e.repeat) togglePlaying();
@@ -289,7 +294,7 @@ export default function App() {
           </div>
           <div class="bar-dots" aria-hidden="true">
             <Index each={Array.from({ length: beatCount() })}>
-              {(_, index) => <span class="bar-dot" classList={{ active: activeBeat() === index, accent: beats[index].accent }} />}
+              {(_, index) => <span class="bar-dot" classList={{ active: activeBeat() === index, accent: beats[index].levels[0] === "maxAccent" }} />}
             </Index>
           </div>
         </div>
@@ -346,8 +351,7 @@ export default function App() {
               active={activeBeat() === index}
               activeSub={activeBeat() === index ? activeSub() : null}
               onSubDivisionChange={(n) => setBeats(index, "subDivision", n)}
-              onEnabledChange={(i, on) => setBeats(index, "enabled", i, on)}
-              onAccentChange={(on) => setBeats(index, "accent", on)}
+              onLevelChange={(i, level) => setBeats(index, "levels", i, level)}
             />
           )}
         </Index>

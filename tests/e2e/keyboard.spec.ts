@@ -1,4 +1,4 @@
-import { beat, countField, expect, playButton, subCheckbox, tempoField, tempoSlider, test } from "./fixtures";
+import { beat, countField, expect, playButton, subButton, tempoField, tempoSlider, test } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 async function blur(page: Page) {
@@ -85,13 +85,19 @@ test("Space on a focused button toggles playback instead of clicking it", async 
   await expectState(page, { button: "Start" });
 });
 
-test("Space on a checkbox and arrows on radios and sliders keep their own meaning", async ({ page }) => {
-  const checkbox = subCheckbox(page, 1, 0);
-  await checkbox.focus();
+test("Space and Enter on a subdivision step its level; arrows on radios and sliders keep their own meaning", async ({ page }) => {
+  const button = subButton(page, 1, 0);
+  await button.focus();
+  await expect(button).toHaveAccessibleName("Subdivision 1: accent");
   await page.keyboard.press("Space");
-  await expect(checkbox).not.toBeChecked();
+  await expect(button).toHaveAccessibleName("Subdivision 1: max accent");
   await expectState(page, { button: "Start" });
-  // Arrows on a checkbox change the tempo.
+  await page.keyboard.press("Enter");
+  await expect(button).toHaveAccessibleName("Subdivision 1: mute");
+  await page.keyboard.press("Space");
+  await expect(button).toHaveAccessibleName("Subdivision 1: normal");
+  await expectState(page, { button: "Start" });
+  // Arrows on a subdivision change the tempo.
   await page.keyboard.press("ArrowUp");
   await expectState(page, { tempo: "121" });
 

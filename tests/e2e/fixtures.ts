@@ -1,5 +1,5 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
-import { nextPosition, type BeatSettings, type Position } from "../../src/metronome";
+import { nextPosition, type BeatSettings, type Level, type Position } from "../../src/metronome";
 
 export { expect };
 
@@ -174,9 +174,18 @@ export const test = base.extend({
 
 // Note interval at 120 BPM with 4 subdivisions per beat.
 export const NOTE_120_4 = 60 / 120 / 4;
-export const ACCENT_HZ = 1760;
-export const BEAT_HZ = 1320;
-export const SUB_HZ = 880;
+export const MAX_ACCENT_HZ = 1760;
+export const ACCENT_HZ = 1320;
+export const NORMAL_HZ = 880;
+// Pitch and peak gain of the click of each level that sounds.
+export const CLICK_OF = {
+  normal: { hz: NORMAL_HZ, peak: 0.5 },
+  accent: { hz: ACCENT_HZ, peak: 0.7 },
+  maxAccent: { hz: MAX_ACCENT_HZ, peak: 1 },
+} as const;
+// Levels in the order a click steps through them, with the names the buttons state.
+export const LEVEL_ORDER: Level[] = ["mute", "normal", "accent", "maxAccent"];
+export const LEVEL_NAMES: Record<Level, string> = { mute: "mute", normal: "normal", accent: "accent", maxAccent: "max accent" };
 
 export const playButton = (page: Page) => page.locator(".play-button");
 export const tapButton = (page: Page) => page.getByRole("button", { name: "Tap tempo" });
@@ -185,19 +194,18 @@ export const tempoSlider = (page: Page) => page.locator(".tempo-slider");
 export const volumeSlider = (page: Page) => page.locator(".volume-slider");
 export const countField = (page: Page) => page.locator("#beat-count");
 export const beat = (page: Page, index: number) => page.locator(".beat").nth(index);
-export const subCheckbox = (page: Page, beatIndex: number, sub: number) =>
-  beat(page, beatIndex).getByRole("checkbox", { name: `Subdivision ${sub + 1}` });
-// Sets a subdivision's on/off flag by clicking its pill. The hover style puts the pill above the
-// transparent checkbox in Firefox, so the click goes to the label, as a user's click does.
-export async function setSub(page: Page, beatIndex: number, sub: number, on: boolean) {
-  const checkbox = subCheckbox(page, beatIndex, sub);
-  if ((await checkbox.isChecked()) !== on) await beat(page, beatIndex).locator(".sub").nth(sub).click();
-  await expect(checkbox).toBeChecked({ checked: on });
+export const subButton = (page: Page, beatIndex: number, sub: number) =>
+  beat(page, beatIndex).getByRole("button", { name: new RegExp(`^Subdivision ${sub + 1}: `) });
+// Sets a subdivision's level by clicking its button until it shows that level.
+export async function setSub(page: Page, beatIndex: number, sub: number, level: Level) {
+  const button = subButton(page, beatIndex, sub);
+  const current = (await button.getAttribute("data-level")) as Level;
+  const steps = (LEVEL_ORDER.indexOf(level) - LEVEL_ORDER.indexOf(current) + LEVEL_ORDER.length) % LEVEL_ORDER.length;
+  for (let i = 0; i < steps; i++) await button.click();
+  await expect(button).toHaveAccessibleName(`Subdivision ${sub + 1}: ${LEVEL_NAMES[level]}`);
 }
 export const subdivisionRadio = (page: Page, beatIndex: number, n: number) =>
   beat(page, beatIndex).locator(`input[type=radio][value="${n}"]`);
-export const accentCheckbox = (page: Page, beatIndex: number) =>
-  page.getByRole("checkbox", { name: `Accent beat ${beatIndex + 1}` });
 
 // Types a value into a number field and commits it, as leaving the field does.
 export async function commit(field: Locator, value: number) {
@@ -256,27 +264,32 @@ export interface ExpectedNote extends Position {
   peak: number;
 }
 
-// The notes the scheduler plays after `from` under fixed settings, with all subdivisions enabled.
+// The notes the scheduler plays after `from` under fixed settings, with no subdivision muted.
 export function expectedNotes(from: ExpectedNote, count: number, tempo: number, beatCount: number, beats: BeatSettings[]) {
   const out: ExpectedNote[] = [];
   let prev = from;
   for (let i = 0; i < count; i++) {
     const pos = nextPosition(prev, beatCount, beats);
     const time = prev.time + 60 / tempo / beats[prev.beat].subDivision;
-    const accent = beats[pos.beat].accent;
-    const hz = pos.sub > 0 ? SUB_HZ : accent ? ACCENT_HZ : BEAT_HZ;
-    const peak = pos.sub > 0 ? 0.5 : accent ? 1 : 0.7;
-    prev = { ...pos, time, hz, peak };
+    const level = beats[pos.beat].levels[pos.sub];
+    if (level === "mute") throw new Error("expectedNotes does not handle muted subdivisions");
+    prev = { ...pos, time, ...CLICK_OF[level] };
     out.push(prev);
   }
   return out;
 }
 
-export function beatsOf(subDivisions: number[], accents: boolean[] = subDivisions.map((_, i) => i === 0)): BeatSettings[] {
-  return subDivisions.map((subDivision, i) => ({ subDivision, enabled: Array(8).fill(true), accent: accents[i] }));
+// Beats with the given subdivisions and default levels, the first subdivision of each beat at max accent
+// where `maxAccents` is true and at accent elsewhere.
+export function beatsOf(subDivisions: number[], maxAccents: boolean[] = subDivisions.map((_, i) => i === 0)): BeatSettings[] {
+  return subDivisions.map((subDivision, i) => ({
+    subDivision,
+    levels: Array.from({ length: 8 }, (_, sub): Level => (sub > 0 ? "normal" : maxAccents[i] ? "maxAccent" : "accent")),
+  }));
 }
 
-// Summary of the visible settings: tempo, count, volume and per beat "subdivision:flags:accent".
+// Summary of the visible settings: tempo, count, volume and per beat "subdivision:levels", with one digit
+// per shown subdivision: 0 mute, 1 normal, 2 accent, 3 max accent.
 export function appState(page: Page) {
   return page.evaluate(() => ({
     tempo: (document.querySelector("#tempo") as HTMLInputElement).value,
@@ -285,9 +298,9 @@ export function appState(page: Page) {
     volume: (document.querySelector(".volume-slider") as HTMLInputElement).value,
     beats: [...document.querySelectorAll(".beat")].map((b) => {
       const sub = (b.querySelector("input[type=radio]:checked") as HTMLInputElement).value;
-      const flags = [...b.querySelectorAll<HTMLInputElement>(".sub input[type=checkbox]")].map((c) => (c.checked ? 1 : 0)).join("");
-      const accent = (b.querySelector(".accent-toggle input") as HTMLInputElement).checked ? "A" : "-";
-      return `${sub}:${flags}:${accent}`;
+      const digits = ["mute", "normal", "accent", "maxAccent"];
+      const levels = [...b.querySelectorAll<HTMLElement>(".sub")].map((s) => digits.indexOf(s.dataset.level ?? "")).join("");
+      return `${sub}:${levels}`;
     }),
   }));
 }
@@ -297,5 +310,5 @@ export const DEFAULT_STATE = {
   slider: "120",
   count: "4",
   volume: "80",
-  beats: ["4:1111:A", "4:1111:-", "4:1111:-", "4:1111:-"],
+  beats: ["4:3111", "4:2111", "4:2111", "4:2111"],
 };

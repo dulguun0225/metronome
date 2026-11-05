@@ -1,9 +1,18 @@
+// How a subdivision sounds: not at all, or with a click of rising pitch and gain.
+export type Level = "mute" | "normal" | "accent" | "maxAccent";
+
+// Every level, in the order a click on a subdivision steps through them.
+export const LEVELS: readonly Level[] = ["mute", "normal", "accent", "maxAccent"];
+
+// The level after `level` in LEVELS, wrapping from the last to the first.
+export function nextLevel(level: Level): Level {
+  return LEVELS[(LEVELS.indexOf(level) + 1) % LEVELS.length];
+}
+
 export interface BeatSettings {
   subDivision: number;
-  // One flag per possible subdivision; only the first `subDivision` flags are used.
-  enabled: boolean[];
-  // Whether the first subdivision of this beat sounds at the accent pitch.
-  accent: boolean;
+  // One level per possible subdivision; only the first `subDivision` levels are used.
+  levels: Level[];
 }
 
 export interface Position {
@@ -29,18 +38,25 @@ const START_DELAY = 0.05;
 // Click sound. Peak gain of each click, relative to the master volume.
 const ATTACK = 0.002;
 const DECAY = 0.04;
-const ACCENT_LEVEL = 1;
-const BEAT_LEVEL = 0.7;
-const SUB_LEVEL = 0.5;
+const MAX_ACCENT_GAIN = 1;
+const ACCENT_GAIN = 0.7;
+const NORMAL_GAIN = 0.5;
 // Time constant of master volume changes, so a change during a click does not make it crackle.
 const VOLUME_TIME_CONSTANT = 0.01;
 // Stop fades the run's output out with this time constant, then disconnects it after STOP_DISCONNECT_MS,
 // when the gain is below 1e-3 of its value, so a click cut mid-envelope does not pop.
 const STOP_TIME_CONSTANT = 0.002;
 const STOP_DISCONNECT_MS = 15;
-const ACCENT_HZ = 1760;
-const BEAT_HZ = 1320;
-const SUB_HZ = 880;
+const MAX_ACCENT_HZ = 1760;
+const ACCENT_HZ = 1320;
+const NORMAL_HZ = 880;
+
+// Pitch and peak gain of the click of each level that sounds.
+const CLICKS: Record<Exclude<Level, "mute">, { hz: number; gain: number }> = {
+  normal: { hz: NORMAL_HZ, gain: NORMAL_GAIN },
+  accent: { hz: ACCENT_HZ, gain: ACCENT_GAIN },
+  maxAccent: { hz: MAX_ACCENT_HZ, gain: MAX_ACCENT_GAIN },
+};
 
 // Audio Session API (Safari): the "playback" type makes audio play with the iPhone silent switch on.
 interface AudioSessionNavigator {
@@ -163,24 +179,20 @@ export class Metronome {
       if (note.time >= horizon) return;
       // After a timer stall (e.g. a background tab), continue from now instead of playing a burst of late notes.
       if (note.time < ctx.currentTime) note.time = ctx.currentTime;
-      if (beats[note.beat]?.enabled[note.sub]) {
-        const accent = beats[note.beat].accent;
-        const hz = note.sub > 0 ? SUB_HZ : accent ? ACCENT_HZ : BEAT_HZ;
-        const level = note.sub > 0 ? SUB_LEVEL : accent ? ACCENT_LEVEL : BEAT_LEVEL;
-        this.#click(ctx, output, note.time, hz, level);
-      }
-      // Unchecked subdivisions are queued too, so their position is still shown.
+      const level = beats[note.beat]?.levels[note.sub] ?? "mute";
+      if (level !== "mute") this.#click(ctx, output, note.time, CLICKS[level].hz, CLICKS[level].gain);
+      // Muted subdivisions are queued too, so their position is still shown.
       this.#queue.push(note);
       this.#last = note;
     }
   }
 
-  #click(ctx: AudioContext, output: AudioNode, time: number, hz: number, level: number) {
+  #click(ctx: AudioContext, output: AudioNode, time: number, hz: number, peak: number) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.frequency.value = hz;
     gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(level, time + ATTACK);
+    gain.gain.exponentialRampToValueAtTime(peak, time + ATTACK);
     gain.gain.exponentialRampToValueAtTime(0.0001, time + ATTACK + DECAY);
     osc.connect(gain);
     gain.connect(output);
