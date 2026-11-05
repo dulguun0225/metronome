@@ -16,7 +16,7 @@ import {
   start,
   stop,
   setSub,
-  subButton,
+  subSlider,
   test,
   volumeSlider,
   waitForClicks,
@@ -121,16 +121,17 @@ test("changes while playing apply from the next note", async ({ page }) => {
   const afterChange = expectedNotes(last, 24, 90, 4, beatsOf([4, 3, 4, 4]));
   check(list.slice(n0, n0 + 24), afterChange);
 
-  // Beat count lowered to 3 and the max accent moved to beat 3: its first subdivision steps from accent to
-  // max accent, that of beat 1 from max accent through mute and normal to accent.
+  // Beat count lowered to 3 and the max accent moved to beat 3: its first subdivision is set from accent to
+  // max accent, that of beat 1 from max accent to accent (digit keys on the sliders).
   const n1 = await page.evaluate(() => {
     const n = window.__audio.clicks.length;
     const count = document.querySelector("#beat-count") as HTMLInputElement;
     count.value = "3";
     count.dispatchEvent(new Event("change", { bubbles: true }));
-    const firstSub = (b: number) => document.querySelectorAll(".beat")[b].querySelector(".sub") as HTMLButtonElement;
-    for (let i = 0; i < 3; i++) firstSub(0).click();
-    firstSub(2).click();
+    const setFirstSub = (b: number, digit: string) =>
+      document.querySelectorAll(".beat")[b].querySelector(".sub")!.dispatchEvent(new KeyboardEvent("keydown", { key: digit, bubbles: true }));
+    setFirstSub(0, "2");
+    setFirstSub(2, "3");
     return n;
   });
   list = await waitForClicks(page, n1 + 20);
@@ -181,7 +182,7 @@ test("each level sets the click pitch and gain; mute is silent; a max accent mar
     return pattern(i, [false, false, true, false]);
   };
   list.forEach((c, k) => expect({ hz: c.hz, peak: c.peak }, `position ${positions[k]}`).toEqual(expected(positions[k])));
-  expect(await subButton(page, 1, 0).getAttribute("data-level")).toBe("mute");
+  expect(await subSlider(page, 1, 0).getAttribute("data-level")).toBe("mute");
 });
 
 test("the volume slider sets the master volume live; click levels stay relative", async ({ page }) => {

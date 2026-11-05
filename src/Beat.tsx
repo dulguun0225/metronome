@@ -1,7 +1,7 @@
 import { For, Index } from "solid-js";
-import { nextLevel, type BeatSettings, type Level } from "./metronome";
+import { LEVELS, levelAtPosition, type BeatSettings, type Level } from "./metronome";
 
-// Level names as read out and stated in each subdivision button's accessible name.
+// Level names as read out as each subdivision slider's value.
 const LEVEL_NAMES: Record<Level, string> = {
     mute: "mute",
     normal: "normal",
@@ -18,6 +18,37 @@ export default function Beat(props: {
     onSubDivisionChange: (subDivision: number) => void;
     onLevelChange: (sub: number, level: Level) => void;
 }) {
+    // Sets a subdivision's level from the pointer's vertical position in its cell.
+    const setFromPointer = (sub: number, current: Level, e: PointerEvent & { currentTarget: HTMLElement }) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const level = levelAtPosition(e.clientY - rect.top, rect.height);
+        if (level !== current) props.onLevelChange(sub, level);
+    };
+    const onPointerDown = (sub: number, current: Level, e: PointerEvent & { currentTarget: HTMLElement }) => {
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setFromPointer(sub, current, e);
+    };
+    const onPointerMove = (sub: number, current: Level, e: PointerEvent & { currentTarget: HTMLElement }) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) setFromPointer(sub, current, e);
+    };
+    const onPointerEnd = (e: PointerEvent & { currentTarget: HTMLElement }) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    };
+    // Arrow keys step one level (no wrap), Home and End go to the lowest and highest, digits 0-3 set it.
+    const onKeyDown = (sub: number, current: Level, e: KeyboardEvent) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const index = LEVELS.indexOf(current);
+        let next: number;
+        if (e.key === "ArrowUp" || e.key === "ArrowRight") next = Math.min(index + 1, LEVELS.length - 1);
+        else if (e.key === "ArrowDown" || e.key === "ArrowLeft") next = Math.max(index - 1, 0);
+        else if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = LEVELS.length - 1;
+        else if (e.key.length === 1 && e.key >= "0" && e.key < String(LEVELS.length)) next = Number(e.key);
+        else return;
+        e.preventDefault();
+        if (next !== index) props.onLevelChange(sub, LEVELS[next]);
+    };
     const subDivisionChoices = [1, 2, 3, 4, 5, 6, 7, 8];
     const headingId = () => `beat-${props.index}-heading`;
     return (
@@ -51,19 +82,29 @@ export default function Beat(props: {
                 </div>
             </fieldset>
             <div class="subs" role="group" aria-label={`Beat ${props.index + 1} notes`}>
-                {/* Each click (also Enter or Space) steps the subdivision to the next level. */}
+                {/* Each cell is a vertical slider: a press or drag sets the level from the pointer's height. */}
                 <Index each={props.settings.levels.slice(0, props.settings.subDivision)}>
                     {(level, i) => (
-                        <button
-                            type="button"
+                        <div
                             class="sub"
                             classList={{ active: props.activeSub === i }}
                             data-level={level()}
-                            aria-label={`Subdivision ${i + 1}: ${LEVEL_NAMES[level()]}`}
-                            onClick={() => props.onLevelChange(i, nextLevel(level()))}
+                            role="slider"
+                            tabindex="0"
+                            aria-label={`Subdivision ${i + 1}`}
+                            aria-orientation="vertical"
+                            aria-valuemin={0}
+                            aria-valuemax={LEVELS.length - 1}
+                            aria-valuenow={LEVELS.indexOf(level())}
+                            aria-valuetext={LEVEL_NAMES[level()]}
+                            onPointerDown={(e) => onPointerDown(i, level(), e)}
+                            onPointerMove={(e) => onPointerMove(i, level(), e)}
+                            onPointerUp={onPointerEnd}
+                            onPointerCancel={onPointerEnd}
+                            onKeyDown={(e) => onKeyDown(i, level(), e)}
                         >
                             <span class="sub-mark" aria-hidden="true" />
-                        </button>
+                        </div>
                     )}
                 </Index>
             </div>

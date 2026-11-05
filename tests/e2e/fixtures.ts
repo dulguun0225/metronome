@@ -183,7 +183,7 @@ export const CLICK_OF = {
   accent: { hz: ACCENT_HZ, peak: 0.7 },
   maxAccent: { hz: MAX_ACCENT_HZ, peak: 1 },
 } as const;
-// Levels in the order a click steps through them, with the names the buttons state.
+// Levels from lowest to highest (each slider's value), with the names the sliders state as their value text.
 export const LEVEL_ORDER: Level[] = ["mute", "normal", "accent", "maxAccent"];
 export const LEVEL_NAMES: Record<Level, string> = { mute: "mute", normal: "normal", accent: "accent", maxAccent: "max accent" };
 
@@ -194,15 +194,23 @@ export const tempoSlider = (page: Page) => page.locator(".tempo-slider");
 export const volumeSlider = (page: Page) => page.locator(".volume-slider");
 export const countField = (page: Page) => page.locator("#beat-count");
 export const beat = (page: Page, index: number) => page.locator(".beat").nth(index);
-export const subButton = (page: Page, beatIndex: number, sub: number) =>
-  beat(page, beatIndex).getByRole("button", { name: new RegExp(`^Subdivision ${sub + 1}: `) });
-// Sets a subdivision's level by clicking its button until it shows that level.
+export const subSlider = (page: Page, beatIndex: number, sub: number) =>
+  beat(page, beatIndex).getByRole("slider", { name: `Subdivision ${sub + 1}`, exact: true });
+// Point at the middle of a level's band in a subdivision cell: max accent at the top, mute at the bottom.
+export async function bandPosition(slider: Locator, level: Level) {
+  const box = (await slider.boundingBox())!;
+  const band = LEVEL_ORDER.length - 1 - LEVEL_ORDER.indexOf(level);
+  return { x: box.width / 2, y: ((band + 0.5) * box.height) / LEVEL_ORDER.length };
+}
+export async function expectLevel(slider: Locator, level: Level) {
+  await expect(slider).toHaveAttribute("aria-valuenow", String(LEVEL_ORDER.indexOf(level)));
+  await expect(slider).toHaveAttribute("aria-valuetext", LEVEL_NAMES[level]);
+}
+// Sets a subdivision's level by clicking in that level's band of its cell.
 export async function setSub(page: Page, beatIndex: number, sub: number, level: Level) {
-  const button = subButton(page, beatIndex, sub);
-  const current = (await button.getAttribute("data-level")) as Level;
-  const steps = (LEVEL_ORDER.indexOf(level) - LEVEL_ORDER.indexOf(current) + LEVEL_ORDER.length) % LEVEL_ORDER.length;
-  for (let i = 0; i < steps; i++) await button.click();
-  await expect(button).toHaveAccessibleName(`Subdivision ${sub + 1}: ${LEVEL_NAMES[level]}`);
+  const slider = subSlider(page, beatIndex, sub);
+  await slider.click({ position: await bandPosition(slider, level) });
+  await expectLevel(slider, level);
 }
 export const subdivisionRadio = (page: Page, beatIndex: number, n: number) =>
   beat(page, beatIndex).locator(`input[type=radio][value="${n}"]`);

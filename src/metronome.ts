@@ -1,12 +1,16 @@
 // How a subdivision sounds: not at all, or with a click of rising pitch and gain.
 export type Level = "mute" | "normal" | "accent" | "maxAccent";
 
-// Every level, in the order a click on a subdivision steps through them.
+// Every level, from lowest to highest.
 export const LEVELS: readonly Level[] = ["mute", "normal", "accent", "maxAccent"];
 
-// The level after `level` in LEVELS, wrapping from the last to the first.
-export function nextLevel(level: Level): Level {
-  return LEVELS[(LEVELS.indexOf(level) + 1) % LEVELS.length];
+// The level for a pointer `y` px below the top of a subdivision cell `height` px tall. The cell is
+// split into four equal bands, max accent at the top and mute at the bottom; a band's top edge belongs
+// to it. Positions above the cell give max accent, positions below it mute.
+export function levelAtPosition(y: number, height: number): Level {
+  if (!(height > 0) || Number.isNaN(y)) return "mute";
+  const fromTop = Math.min(LEVELS.length - 1, Math.max(0, Math.floor((y / height) * LEVELS.length)));
+  return LEVELS[LEVELS.length - 1 - fromTop];
 }
 
 export interface BeatSettings {

@@ -697,8 +697,8 @@ h2 {
   outline-offset: 1px;
 }
 
-/* Subdivision levels: buttons shown as outlined bars filled from the bottom, more for a higher level;
-   mute = hollow and dashed. */
+/* Subdivision levels: vertical sliders shown as outlined bars filled from the bottom, more for a higher
+   level; mute = hollow and dashed. */
 
 .subs {
   display: flex;
@@ -713,13 +713,15 @@ h2 {
   align-items: center;
   flex: 1 1 0;
   min-width: 0;
-  height: 2.5rem;
+  /* Four level bands of 12 px each. */
+  height: 3rem;
   padding: 0;
   border: 0;
   border-radius: var(--radius-small);
   background: transparent;
-  /* Quick repeated taps must not zoom the page. */
-  touch-action: manipulation;
+  cursor: ns-resize;
+  /* A touch drag sets the level instead of scrolling or zooming the page. */
+  touch-action: none;
 }
 
 .sub[data-level="normal"] {

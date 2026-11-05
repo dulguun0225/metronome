@@ -44,9 +44,9 @@ function isInputOfType(el: Element | null, ...types: string[]) {
   return el instanceof HTMLInputElement && types.includes(el.type);
 }
 
-// A subdivision button of a Beat; Space on it steps its level.
-function isSubButton(el: Element | null) {
-  return el instanceof HTMLButtonElement && el.classList.contains("sub");
+// A subdivision level slider of a Beat; arrow keys on it change its level.
+function isLevelSlider(el: Element | null) {
+  return el instanceof HTMLElement && el.classList.contains("sub");
 }
 
 // Reads an integer from a number input, clamps it to [min, max] and stores it.
@@ -163,12 +163,12 @@ export default function App() {
     const target = document.activeElement;
     if (isTextField(target)) return;
     if (e.key === " ") {
-      if (isInputOfType(target, "checkbox", "radio") || isSubButton(target)) return;
+      if (isInputOfType(target, "checkbox", "radio")) return;
       // Also stops a focused button from being clicked by the same key press.
       e.preventDefault();
       if (!e.repeat) togglePlaying();
     } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      if (isInputOfType(target, "radio", "range")) return;
+      if (isInputOfType(target, "radio", "range") || isLevelSlider(target)) return;
       e.preventDefault();
       nudgeTempo(e.key === "ArrowUp" ? 1 : -1);
     } else if (e.key === "t" || e.key === "T") {

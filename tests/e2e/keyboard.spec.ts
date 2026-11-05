@@ -1,4 +1,4 @@
-import { beat, countField, expect, playButton, subButton, tempoField, tempoSlider, test } from "./fixtures";
+import { beat, countField, expect, expectLevel, playButton, subSlider, tempoField, tempoSlider, test } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 async function blur(page: Page) {
@@ -85,21 +85,53 @@ test("Space on a focused button toggles playback instead of clicking it", async 
   await expectState(page, { button: "Start" });
 });
 
-test("Space and Enter on a subdivision step its level; arrows on radios and sliders keep their own meaning", async ({ page }) => {
-  const button = subButton(page, 1, 0);
-  await button.focus();
-  await expect(button).toHaveAccessibleName("Subdivision 1: accent");
-  await page.keyboard.press("Space");
-  await expect(button).toHaveAccessibleName("Subdivision 1: max accent");
-  await expectState(page, { button: "Start" });
-  await page.keyboard.press("Enter");
-  await expect(button).toHaveAccessibleName("Subdivision 1: mute");
-  await page.keyboard.press("Space");
-  await expect(button).toHaveAccessibleName("Subdivision 1: normal");
-  await expectState(page, { button: "Start" });
-  // Arrows on a subdivision change the tempo.
+test("keys on a level slider set its level", async ({ page }) => {
+  const slider = subSlider(page, 1, 0);
+  await slider.focus();
+  await expectLevel(slider, "accent");
   await page.keyboard.press("ArrowUp");
-  await expectState(page, { tempo: "121" });
+  await expectLevel(slider, "maxAccent");
+  // Clamped at the top: no wrap.
+  await page.keyboard.press("ArrowRight");
+  await expectLevel(slider, "maxAccent");
+  await page.keyboard.press("ArrowDown");
+  await expectLevel(slider, "accent");
+  await page.keyboard.press("ArrowLeft");
+  await expectLevel(slider, "normal");
+  await page.keyboard.press("Home");
+  await expectLevel(slider, "mute");
+  // Clamped at the bottom: no wrap.
+  await page.keyboard.press("ArrowDown");
+  await expectLevel(slider, "mute");
+  await page.keyboard.press("End");
+  await expectLevel(slider, "maxAccent");
+  for (const [digit, level] of [["0", "mute"], ["2", "accent"], ["1", "normal"], ["3", "maxAccent"]] as const) {
+    await page.keyboard.press(digit);
+    await expectLevel(slider, level);
+  }
+  // Other digits are ignored.
+  await page.keyboard.press("4");
+  await expectLevel(slider, "maxAccent");
+  // The arrow keys did not change the tempo.
+  await expectState(page, { tempo: "120", slider: "120", button: "Start" });
+});
+
+test("Space on a level slider toggles playback; arrows on sliders and radios keep their own meaning", async ({ page }) => {
+  const slider = subSlider(page, 1, 0);
+  await slider.focus();
+  await page.keyboard.press("Space");
+  await expectState(page, { button: "Stop" });
+  await page.keyboard.press("Space");
+  await expectState(page, { button: "Start" });
+  await expectLevel(slider, "accent");
+  // ArrowUp on a level slider raises its level, not the tempo.
+  await page.keyboard.press("ArrowUp");
+  await expectLevel(slider, "maxAccent");
+  await expectState(page, { tempo: "120" });
+  await page.keyboard.press("ArrowDown");
+  await expectLevel(slider, "accent");
+  await expectState(page, { tempo: "120" });
+  await commitTempo(page, 121);
 
   const radio = beat(page, 3).locator("input[type=radio]:checked");
   await radio.focus();

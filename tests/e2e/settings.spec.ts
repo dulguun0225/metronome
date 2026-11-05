@@ -89,6 +89,7 @@ test("Reset restores every default, also while playing", async ({ page }) => {
   await stop(page);
 });
 
+// customize() sets the levels by clicking in the slider bands, so this also covers levels set by pointer.
 test("settings survive a reload; playing state does not", async ({ page }) => {
   await customize(page);
   await start(page);
