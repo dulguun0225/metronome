@@ -32,7 +32,6 @@ declare global {
       // Releases held locks as the browser does when the page is hidden.
       releaseByBrowser(): void;
     };
-    __swRegisterCalls: number;
   }
 }
 
@@ -130,20 +129,6 @@ function recordAudio(processorName: string) {
       return contexts[contexts.length - 1]?.currentTime ?? 0;
     },
   };
-
-  window.__swRegisterCalls = 0;
-  try {
-    const container = navigator.serviceWorker;
-    if (container) {
-      const register = container.register.bind(container);
-      container.register = (...args: Parameters<ServiceWorkerContainer["register"]>) => {
-        window.__swRegisterCalls++;
-        return register(...args);
-      };
-    }
-  } catch {
-    // No service worker support here.
-  }
 }
 
 // Init script: replaces navigator.wakeLock with a stub that logs requests and releases.
