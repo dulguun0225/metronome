@@ -70,6 +70,20 @@ test("plays 120 BPM 4/4 with four subdivisions at the right times, pitches and l
   await stop(page);
 });
 
+test("a restart after the AudioContext was suspended plays in a new AudioContext", async ({ page }) => {
+  await start(page);
+  await waitForClicks(page, 2);
+  await stop(page);
+  // Suspends the context as an interruption on iOS does.
+  await page.evaluate(() => window.__audio.contexts[0].suspend());
+  const before = (await clicks(page)).length;
+
+  await start(page);
+  await waitForClicks(page, before + 2);
+  expect(await page.evaluate(() => window.__audio.contexts.map((c) => c.state))).toEqual(["closed", "running"]);
+  await stop(page);
+});
+
 test("a muted note is silent but still highlighted", async ({ page }) => {
   await setSub(page, 0, 1, "mute");
   await start(page);

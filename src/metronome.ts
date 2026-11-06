@@ -119,6 +119,14 @@ export class Metronome {
   start() {
     this.stop();
     setAudioSessionToPlayback();
+    // iOS leaves a context interrupted or suspended after the app was in the background or another app
+    // took the audio session, and resume() may then not take effect. A context that is not running is
+    // replaced by one created in this user gesture, which starts. The worklet module is loaded per context.
+    if (this.#ctx && this.#ctx.state !== "running") {
+      this.#ctx.close().catch(() => undefined);
+      this.#ctx = null;
+      this.#module = undefined;
+    }
     this.#ctx ??= new AudioContext();
     const ctx = this.#ctx;
     void ctx.resume();
